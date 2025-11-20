@@ -6,12 +6,13 @@ from datetime import datetime, timedelta
 import io
 
 # ==========================================
-# 0. 全域設定：AI 顧問指令 (已加入潛力股判斷邏輯)
+# 0. 全域設定：AI 顧問指令 (將內建於 Excel 中)
 # ==========================================
 
 AI_CONSULTANT_PROMPT = """
 # Role
-你是一位擁有 10 年經驗的資深成效廣告分析師，擅長數據解讀、商業策略推演與消費者心理分析。請根據我上傳的廣告數據 Excel 檔案（涵蓋 Campaign, AdSet, Ad 三個層級，以及 P7D, PP7D, P30D 不同時間區間），進行深度的廣告帳戶健檢。
+你是一位擁有 10 年經驗的資深成效廣告分析師，擅長數據解讀、商業策略推演與消費者心理分析。
+請讀取本 Excel 檔案中的所有數據分頁（涵蓋 Campaign, AdSet, Ad 三個層級，以及 P7D, PP7D, P30D 不同時間區間），進行深度的廣告帳戶健檢。
 
 # Data Context & File Naming Logic
 - **P7D**: 過去 7 天數據（近期表現）。
@@ -19,6 +20,7 @@ AI_CONSULTANT_PROMPT = """
 - **P30D**: 過去 30 天數據（用於看長期趨勢與累積數據）。
 - **Q10_Trend**: 每日趨勢數據。
 - **關鍵指標**: CPA (Cost Per Action), CTR (點擊率), CPC (點擊成本), Spend (花費), Conversions (free-course/成果)。
+- **全帳戶平均**: 每個表格的最下方有一列「全帳戶平均」，請以此作為基準線來判斷優劣。
 
 # Analysis Requirements (請依序執行以下任務)
 
@@ -66,37 +68,89 @@ def clean_ad_name(name):
     """移除廣告名稱中的 ' - 複本' 及後續所有內容，以便將相同創意合併。"""
     return re.sub(r' - 複本.*$', '', str(name)).strip()
 
-def calculate_and_rank_metrics(df_group, metric_type, sort_ascending):
-    """計算 CPA/CPC/CTR 指標並排名。"""
+def create_summary_row(df, metric_col, numerator_col, denominator_col, is_percentage=False):
+    """計算加總平均列的輔助函數"""
+    total_num = df[numerator_col].sum()
+    total_denom = df[denominator_col].sum()
     
+    if is_percentage:
+        # CTR = Clicks / Impressions * 100
+        avg_metric = (total_num / total_denom * 100) if total_denom > 0 else 0
+    else:
+        # CPA = Spend / Conv, CPC = Spend / Clicks
+        avg_metric = (total_num / total_denom) if total_denom > 0 else 0
+        
+    summary_dict = {
+        numerator_col: total_num,
+        denominator_col: total_denom,
+        metric_col: round(avg_metric, 2)
+    }
+    
+    # 處理分組欄位 (非數值欄位)
+    # 找出不在 [分子, 分母, 指標] 中的欄位名稱
+    group_cols = [c for c in df.columns if c not in [numerator_col, denominator_col, metric_col]]
+    
+    # 設定第一欄為 "全帳戶平均"，其他為 "-"
+    if group_cols:
+        summary_dict[group_cols[0]] = '全帳戶平均'
+        for col in group_cols[1:]:
+            summary_dict[col] = '-'
+            
+    return pd.DataFrame([summary_dict])
+
+def calculate_and_rank_metrics(df_group, metric_type, sort_ascending):
+    """計算 CPA/CPC/CTR 指標並排名，並在最後加入全帳戶平均列。"""
+    
+    df_metrics = None
+    summary_row = None
+
     if metric_type == 'CPA':
-        # Q1, Q2, Q3 metrics
+        # 1. 聚合
         df_metrics = df_group.agg({
             '花費金額 (TWD)': 'sum',
             'free-course': 'sum'
         }).reset_index()
+        
+        # 2. 計算個別指標
         df_metrics['CPA (TWD)'] = df_metrics.apply(lambda x: x['花費金額 (TWD)'] / x['free-course'] if x['free-course'] > 0 else np.nan, axis=1)
         df_metrics.replace([np.inf, -np.inf], np.nan, inplace=True)
-        return df_metrics.sort_values(by='CPA (TWD)', ascending=sort_ascending).round(2)
+        
+        # 3. 排序 (先排序再加平均)
+        df_metrics = df_metrics.sort_values(by='CPA (TWD)', ascending=sort_ascending).round(2)
+        
+        # 4. 計算全帳戶平均列
+        summary_row = create_summary_row(df_metrics, 'CPA (TWD)', '花費金額 (TWD)', 'free-course')
 
     elif metric_type == 'CPC':
-        # Q4, Q5, Q6 metrics
         df_metrics = df_group.agg({
             '花費金額 (TWD)': 'sum',
             '連結點擊次數': 'sum'
         }).reset_index()
+        
         df_metrics['CPC (TWD)'] = df_metrics.apply(lambda x: x['花費金額 (TWD)'] / x['連結點擊次數'] if x['連結點擊次數'] > 0 else np.nan, axis=1)
         df_metrics.replace([np.inf, -np.inf], np.nan, inplace=True)
-        return df_metrics.sort_values(by='CPC (TWD)', ascending=sort_ascending).round(2)
+        
+        df_metrics = df_metrics.sort_values(by='CPC (TWD)', ascending=sort_ascending).round(2)
+        
+        summary_row = create_summary_row(df_metrics, 'CPC (TWD)', '花費金額 (TWD)', '連結點擊次數')
 
     elif metric_type == 'CTR':
-        # Q7, Q8, Q9 metrics
         df_metrics = df_group.agg({
             '連結點擊次數': 'sum',
             '曝光次數': 'sum'
         }).reset_index()
+        
         df_metrics['CTR (%)'] = df_metrics.apply(lambda x: (x['連結點擊次數'] / x['曝光次數']) * 100 if x['曝光次數'] > 0 else 0, axis=1)
-        return df_metrics.sort_values(by='CTR (%)', ascending=sort_ascending).round(2)
+        
+        df_metrics = df_metrics.sort_values(by='CTR (%)', ascending=sort_ascending).round(2)
+        
+        summary_row = create_summary_row(df_metrics, 'CTR (%)', '連結點擊次數', '曝光次數', is_percentage=True)
+    
+    # 5. 合併：將平均列放到最下方
+    if df_metrics is not None and summary_row is not None:
+        return pd.concat([df_metrics, summary_row], ignore_index=True)
+    
+    return df_metrics
 
 def collect_all_results(df, period_name_short):
     """執行 Q1-Q9 分析並收集結果為 (Sheet Name, DataFrame) 列表。"""
@@ -127,11 +181,31 @@ def collect_all_results(df, period_name_short):
     
     return results
 
-def to_excel_bytes(dfs_to_export):
-    """將列表中的 (sheet_name, DataFrame) 寫入 Excel 文件的 BytesIO。"""
+def to_excel_bytes(dfs_to_export, prompt_text):
+    """
+    將列表中的 (sheet_name, DataFrame) 寫入 Excel 文件的 BytesIO。
+    同時將 Prompt 寫入第一個 '📘_AI_指令說明書' 分頁。
+    """
     output = io.BytesIO()
-    # 使用 xlsxwriter 引擎
+    # 使用 xlsxwriter 引擎以支援格式設定
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        workbook = writer.book
+        
+        # --- 1. 建立並寫入 AI 指令分頁 (最優先) ---
+        instruction_sheet_name = '📘_AI_指令說明書'
+        worksheet = workbook.add_worksheet(instruction_sheet_name)
+        writer.sheets[instruction_sheet_name] = worksheet  # 註冊分頁
+        
+        # 設定格式：自動換行、頂部對齊
+        text_format = workbook.add_format({'text_wrap': True, 'valign': 'top', 'font_size': 11})
+        
+        # 設定欄寬 (A欄寬一點以便閱讀)
+        worksheet.set_column('A:A', 100)
+        
+        # 寫入指令內容
+        worksheet.write('A1', prompt_text, text_format)
+        
+        # --- 2. 寫入其餘數據分頁 ---
         for sheet_name, df in dfs_to_export:
             # 確保 sheet name 不超過 Excel 限制 (31字元)
             safe_sheet_name = sheet_name[:31]
@@ -216,21 +290,15 @@ def display_trend_analysis(df_p30d):
 # ==========================================
 
 def marketing_analysis_app():
-    # Page Config 必須是第一個 Streamlit 指令
+    # Page Config
     st.set_page_config(layout="wide", page_title="廣告成效智能分析工具")
     
     st.title("📊 廣告成效多週期分析工具 (AI Ready)")
-    
-    # ------------------------------------------
-    # 功能 1：AI 顧問指令生成區 (直接調用上方全域變數)
-    # ------------------------------------------
-    with st.expander("🤖 步驟 1：獲取 AI 深度診斷指令 (Prompt)", expanded=True):
-        st.info("💡 使用說明：請點擊右上角「複製」按鈕，將此指令連同下方下載的 **Excel 報表** 一起貼給 ChatGPT/Claude/Gemini，即可獲得專業分析。")
-        st.code(AI_CONSULTANT_PROMPT, language='markdown')
+    st.markdown("### 🚀 流程簡化：")
+    st.info("現在，您只需下載 Excel 檔，直接上傳給 ChatGPT/Claude。**AI 分析指令已自動內建在 Excel 的第一個分頁「📘_AI_指令說明書」中**，無需再手動複製貼上。")
     
     st.markdown("---")
-    st.markdown("### 步驟 2：上傳原始 CSV 進行資料處理")
-    st.markdown("系統將自動依據檔案中**最新日期**，計算三個時間區間 (P7D/PP7D/P30D) 的指標排名與趨勢分析，並生成可供 AI 讀取的 Excel 報表。")
+    st.markdown("### 步驟 1：上傳原始 CSV 進行資料處理")
 
     uploaded_file = st.file_uploader("上傳 CSV 檔案", type=["csv"])
 
@@ -300,15 +368,17 @@ def marketing_analysis_app():
             # Q10: 趨勢數據加入 Excel 輸出列表
             all_dfs_for_excel.append(('Q10_P30D_Trend', q10_df))
 
-            # --- 創建 Excel 下載按鈕 ---
-            excel_data = to_excel_bytes(all_dfs_for_excel)
+            # --- 創建 Excel 下載按鈕 (包含指令分頁) ---
+            # 將 AI_CONSULTANT_PROMPT 傳入函數
+            excel_data = to_excel_bytes(all_dfs_for_excel, AI_CONSULTANT_PROMPT)
             
+            st.markdown("### 步驟 2：下載分析報表")
             st.download_button(
-                label="📥 下載完整分析報表 (.xlsx)",
+                label="📥 下載完整分析報表 (已內建 AI 指令).xlsx",
                 data=excel_data,
                 file_name=f"Ad_Analysis_Report_{max_date.strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                help="包含所有週期的 CPA/CPC/CTR 排名與趨勢數據，請將此檔案提供給 AI。"
+                help="此 Excel 檔已包含 AI 分析指令與所有週期的指標數據，直接上傳給 ChatGPT 即可。"
             )
 
         except Exception as e:
