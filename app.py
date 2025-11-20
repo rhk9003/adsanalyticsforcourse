@@ -306,7 +306,33 @@ def marketing_analysis_app():
         try:
             # 讀取檔案
             df = pd.read_csv(uploaded_file)
+
+            # --- [FIXED] 智慧欄位名稱標準化 ---
+            # 移除欄位名稱前後空白 (解決 'free course ' 或 ' free course' 的問題)
+            df.columns = df.columns.str.strip()
             
+            # 映射字典：將可能的變體映射到程式內部使用的標準名稱
+            column_mapping = {
+                'free course': 'free-course',   # 解決 'free course' (有空白)
+                'Free course': 'free-course',
+                'Free Course': 'free-course',
+                '花費金額': '花費金額 (TWD)',    # 解決可能缺漏的單位標示
+                '金額': '花費金額 (TWD)'
+            }
+            df.rename(columns=column_mapping, inplace=True)
+            
+            # 檢查關鍵欄位是否存在，若不存在給予更明確的錯誤提示
+            required_cols = ['天數', '行銷活動名稱', 'free-course', '花費金額 (TWD)', '連結點擊次數', '曝光次數']
+            missing_cols = [c for c in required_cols if c not in df.columns]
+            
+            if missing_cols:
+                st.error(f"❌ 檔案欄位對應失敗。")
+                st.error(f"找不到以下欄位: {missing_cols}")
+                st.warning(f"系統目前偵測到的欄位: {list(df.columns)}")
+                st.info("提示：請檢查您的 CSV 檔是否包含 'free-course' (或 'free course') 以及 '花費金額 (TWD)'。")
+                st.stop()
+            # --------------------------------
+
             # 初始預處理
             df['天數'] = pd.to_datetime(df['天數'])
             
