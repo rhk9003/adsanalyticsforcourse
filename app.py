@@ -111,14 +111,17 @@ def calculate_and_rank_metrics(df_group, metric_type, sort_ascending):
             'free-course': 'sum'
         }).reset_index()
         
-        # 2. 計算個別指標
+        # 2. [NEW] 過濾：排除花費為 0 的項目
+        df_metrics = df_metrics[df_metrics['花費金額 (TWD)'] > 0]
+
+        # 3. 計算個別指標
         df_metrics['CPA (TWD)'] = df_metrics.apply(lambda x: x['花費金額 (TWD)'] / x['free-course'] if x['free-course'] > 0 else np.nan, axis=1)
         df_metrics.replace([np.inf, -np.inf], np.nan, inplace=True)
         
-        # 3. 排序 (先排序再加平均)
+        # 4. 排序 (先排序再加平均)
         df_metrics = df_metrics.sort_values(by='CPA (TWD)', ascending=sort_ascending).round(2)
         
-        # 4. 計算全帳戶平均列
+        # 5. 計算全帳戶平均列 (僅包含有花費的項目)
         summary_row = create_summary_row(df_metrics, 'CPA (TWD)', '花費金額 (TWD)', 'free-course')
 
     elif metric_type == 'CPC':
@@ -126,6 +129,9 @@ def calculate_and_rank_metrics(df_group, metric_type, sort_ascending):
             '花費金額 (TWD)': 'sum',
             '連結點擊次數': 'sum'
         }).reset_index()
+        
+        # 2. [NEW] 過濾：排除花費為 0 的項目
+        df_metrics = df_metrics[df_metrics['花費金額 (TWD)'] > 0]
         
         df_metrics['CPC (TWD)'] = df_metrics.apply(lambda x: x['花費金額 (TWD)'] / x['連結點擊次數'] if x['連結點擊次數'] > 0 else np.nan, axis=1)
         df_metrics.replace([np.inf, -np.inf], np.nan, inplace=True)
@@ -135,16 +141,26 @@ def calculate_and_rank_metrics(df_group, metric_type, sort_ascending):
         summary_row = create_summary_row(df_metrics, 'CPC (TWD)', '花費金額 (TWD)', '連結點擊次數')
 
     elif metric_type == 'CTR':
+        # 注意：CTR 原本不需要花費，但為了過濾，必須把 '花費金額 (TWD)' 加進來聚合
         df_metrics = df_group.agg({
             '連結點擊次數': 'sum',
-            '曝光次數': 'sum'
+            '曝光次數': 'sum',
+            '花費金額 (TWD)': 'sum' 
         }).reset_index()
         
+        # 2. [NEW] 過濾：排除花費為 0 的項目
+        df_metrics = df_metrics[df_metrics['花費金額 (TWD)'] > 0]
+
         df_metrics['CTR (%)'] = df_metrics.apply(lambda x: (x['連結點擊次數'] / x['曝光次數']) * 100 if x['曝光次數'] > 0 else 0, axis=1)
         
         df_metrics = df_metrics.sort_values(by='CTR (%)', ascending=sort_ascending).round(2)
         
+        # 移除 '花費金額 (TWD)' 欄位，保持 CTR 表格乾淨 (Summary row calculation needs it though, handle carefully)
+        # create_summary_row 需要花費金額嗎？不需要，CTR 是 clicks / impressions
         summary_row = create_summary_row(df_metrics, 'CTR (%)', '連結點擊次數', '曝光次數', is_percentage=True)
+        
+        # 在輸出前移除花費欄位 (因為是 CTR 表)
+        df_metrics = df_metrics.drop(columns=['花費金額 (TWD)'])
     
     # 5. 合併：將平均列放到最下方
     if df_metrics is not None and summary_row is not None:
@@ -270,6 +286,9 @@ def display_trend_analysis(df_p30d):
         '連結點擊次數': 'sum',
         '曝光次數': 'sum'
     }).reset_index()
+
+    # 過濾掉花費為 0 的天/行銷活動 (可選，但建議讓趨勢圖也乾淨一點)
+    campaign_daily_trend = campaign_daily_trend[campaign_daily_trend['花費金額 (TWD)'] > 0]
 
     campaign_daily_trend['CPA (TWD)'] = campaign_daily_trend.apply(lambda x: x['花費金額 (TWD)'] / x['free-course'] if x['free-course'] > 0 else np.nan, axis=1)
     campaign_daily_trend['CTR (%)'] = campaign_daily_trend.apply(lambda x: (x['連結點擊次數'] / x['曝光次數']) * 100 if x['曝光次數'] > 0 else 0, axis=1)
