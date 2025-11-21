@@ -281,6 +281,7 @@ def marketing_analysis_app():
             pp7d_start = p7d_start - timedelta(days=7)
             pp7d_end = p7d_start - timedelta(days=1)
             p30d_start = today - timedelta(days=30)
+            p30d_end = today - timedelta(days=1) # [FIXED] 補上缺少的變數定義
             
             df_p7d = df[(df['天數'] >= p7d_start) & (df['天數'] <= p7d_end)].copy()
             df_pp7d = df[(df['天數'] >= pp7d_start) & (df['天數'] <= pp7d_end)].copy()
