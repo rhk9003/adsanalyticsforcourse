@@ -61,7 +61,7 @@ The user has uploaded a **Single-Sheet Excel File**.
 """
 
 # ==========================================
-# 1. 輔助函數 (資料處理核心)
+# 1. 輔助函數 (資料處理核心 - 已改為動態轉換欄位)
 # ==========================================
 
 def clean_ad_name(name):
@@ -98,12 +98,12 @@ def create_summary_row(df, metric_cols):
             
     return pd.DataFrame([summary_dict])
 
-def calculate_consolidated_metrics(df_group):
-    """核心函數：一次計算所有指標並合併。"""
+def calculate_consolidated_metrics(df_group, conv_col):
+    """核心函數：一次計算所有指標並合併 (支援自訂 conversion_col)。"""
     # 1. 聚合
     df_metrics = df_group.agg({
         '花費金額 (TWD)': 'sum',
-        'free-course': 'sum',
+        conv_col: 'sum',
         '連結點擊次數': 'sum',
         '曝光次數': 'sum'
     }).reset_index()
@@ -111,10 +111,10 @@ def calculate_consolidated_metrics(df_group):
     # 2. 過濾
     df_metrics = df_metrics[df_metrics['花費金額 (TWD)'] > 0]
 
-    # 3. 計算指標
-    df_metrics['CPA (TWD)'] = df_metrics.apply(lambda x: x['花費金額 (TWD)'] / x['free-course'] if x['free-course'] > 0 else 0, axis=1)
+    # 3. 計算指標 (使用傳入的 conv_col)
+    df_metrics['CPA (TWD)'] = df_metrics.apply(lambda x: x['花費金額 (TWD)'] / x[conv_col] if x[conv_col] > 0 else 0, axis=1)
     df_metrics['CTR (%)'] = df_metrics.apply(lambda x: (x['連結點擊次數'] / x['曝光次數']) * 100 if x['曝光次數'] > 0 else 0, axis=1)
-    df_metrics['CVR (%)'] = df_metrics.apply(lambda x: (x['free-course'] / x['連結點擊次數']) * 100 if x['連結點擊次數'] > 0 else 0, axis=1)
+    df_metrics['CVR (%)'] = df_metrics.apply(lambda x: (x[conv_col] / x['連結點擊次數']) * 100 if x['連結點擊次數'] > 0 else 0, axis=1)
     df_metrics['CPC (TWD)'] = df_metrics.apply(lambda x: x['花費金額 (TWD)'] / x['連結點擊次數'] if x['連結點擊次數'] > 0 else 0, axis=1)
 
     # 4. 數值修整與排序
@@ -123,9 +123,9 @@ def calculate_consolidated_metrics(df_group):
 
     # 5. 平均列
     metric_config = {
-        'CPA (TWD)': ('花費金額 (TWD)', 'free-course', False),
+        'CPA (TWD)': ('花費金額 (TWD)', conv_col, False),
         'CTR (%)': ('連結點擊次數', '曝光次數', True),
-        'CVR (%)': ('free-course', '連結點擊次數', True),
+        'CVR (%)': (conv_col, '連結點擊次數', True),
         'CPC (TWD)': ('花費金額 (TWD)', '連結點擊次數', False)
     }
     summary_row = create_summary_row(df_metrics, metric_config)
@@ -135,50 +135,47 @@ def calculate_consolidated_metrics(df_group):
     else:
         return df_metrics
 
-def collect_all_results_consolidated(df, period_name_short):
-    """產生整合版的數據列表"""
+def collect_all_results_consolidated(df, period_name_short, conv_col):
+    """產生整合版的數據列表 (支援自訂 conv_col)"""
     # 預處理
     df['廣告名稱_clean'] = df['廣告名稱'].apply(clean_ad_name)
-    cols_to_fill = ['free-course', '花費金額 (TWD)', '連結點擊次數', '曝光次數']
+    cols_to_fill = [conv_col, '花費金額 (TWD)', '連結點擊次數', '曝光次數']
     df[cols_to_fill] = df[cols_to_fill].fillna(0)
     
     results = []
-    results.append((f'{period_name_short}_Ad_廣告', calculate_consolidated_metrics(df.groupby('廣告名稱_clean'))))
-    results.append((f'{period_name_short}_AdSet_廣告組合', calculate_consolidated_metrics(df.groupby(['行銷活動名稱', '廣告組合名稱']))))
-    results.append((f'{period_name_short}_Campaign_行銷活動', calculate_consolidated_metrics(df.groupby('行銷活動名稱'))))
+    results.append((f'{period_name_short}_Ad_廣告', calculate_consolidated_metrics(df.groupby('廣告名稱_clean'), conv_col)))
+    results.append((f'{period_name_short}_AdSet_廣告組合', calculate_consolidated_metrics(df.groupby(['行銷活動名稱', '廣告組合名稱']), conv_col)))
+    results.append((f'{period_name_short}_Campaign_行銷活動', calculate_consolidated_metrics(df.groupby('行銷活動名稱'), conv_col)))
     return results
 
-def get_trend_data(df_p30d):
-    """計算每日趨勢"""
+def get_trend_data(df_p30d, conv_col):
+    """計算每日趨勢 (支援自訂 conv_col)"""
     trend_df = df_p30d.copy()
     
     campaign_daily = trend_df.groupby(['天數', '行銷活動名稱']).agg({
-        '花費金額 (TWD)': 'sum', 'free-course': 'sum', '連結點擊次數': 'sum', '曝光次數': 'sum'
+        '花費金額 (TWD)': 'sum', conv_col: 'sum', '連結點擊次數': 'sum', '曝光次數': 'sum'
     }).reset_index()
     
     account_daily = trend_df.groupby(['天數']).agg({
-        '花費金額 (TWD)': 'sum', 'free-course': 'sum', '連結點擊次數': 'sum', '曝光次數': 'sum'
+        '花費金額 (TWD)': 'sum', conv_col: 'sum', '連結點擊次數': 'sum', '曝光次數': 'sum'
     }).reset_index()
     account_daily['行銷活動名稱'] = '🏆 整體帳戶 (Account Overall)'
     
     final_trend = pd.concat([account_daily, campaign_daily], ignore_index=True)
     final_trend = final_trend[final_trend['花費金額 (TWD)'] > 0]
     
-    final_trend['CPA (TWD)'] = final_trend.apply(lambda x: x['花費金額 (TWD)'] / x['free-course'] if x['free-course'] > 0 else 0, axis=1)
+    final_trend['CPA (TWD)'] = final_trend.apply(lambda x: x['花費金額 (TWD)'] / x[conv_col] if x[conv_col] > 0 else 0, axis=1)
     final_trend['CTR (%)'] = final_trend.apply(lambda x: (x['連結點擊次數'] / x['曝光次數']) * 100 if x['曝光次數'] > 0 else 0, axis=1)
-    final_trend['CVR (%)'] = final_trend.apply(lambda x: (x['free-course'] / x['連結點擊次數']) * 100 if x['連結點擊次數'] > 0 else 0, axis=1)
+    final_trend['CVR (%)'] = final_trend.apply(lambda x: (x[conv_col] / x['連結點擊次數']) * 100 if x['連結點擊次數'] > 0 else 0, axis=1)
     
     final_trend['天數'] = final_trend['天數'].dt.strftime('%Y-%m-%d')
     return final_trend.round(2).sort_values(by=['天數', '行銷活動名稱'])
 
 def to_excel_single_sheet(dfs_list, prompt_text):
-    """
-    將所有數據垂直堆疊在同一個 Excel 分頁中。
-    """
+    """將所有數據垂直堆疊在同一個 Excel 分頁中。"""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
-        # 建立唯一的分頁
         sheet_name = '📘_完整分析報告'
         ws = workbook.add_worksheet(sheet_name)
         writer.sheets[sheet_name] = ws
@@ -186,7 +183,7 @@ def to_excel_single_sheet(dfs_list, prompt_text):
         # 格式設定
         fmt_prompt = workbook.add_format({'text_wrap': True, 'valign': 'top', 'font_size': 11, 'bg_color': '#F0F2F6'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 14, 'font_color': '#0068C9'})
-        fmt_note = workbook.add_format({'italic': True, 'font_size': 10, 'font_color': '#555555'}) # [NEW] 註解格式
+        fmt_note = workbook.add_format({'italic': True, 'font_size': 10, 'font_color': '#555555'})
         fmt_table_header = workbook.add_format({'bold': True, 'bg_color': '#E6E6E6', 'border': 1})
         
         current_row = 0
@@ -195,7 +192,6 @@ def to_excel_single_sheet(dfs_list, prompt_text):
         ws.merge_range('A1:H1', "🤖 AI 分析顧問指令 (SYSTEM PROMPT)", fmt_header)
         current_row += 1
         
-        # 估算 Prompt 行數 (概略)
         prompt_lines = prompt_text.count('\n') + 5
         ws.merge_range(current_row, 0, current_row + prompt_lines, 10, prompt_text, fmt_prompt)
         current_row += prompt_lines + 2
@@ -205,29 +201,22 @@ def to_excel_single_sheet(dfs_list, prompt_text):
         
         # 2. 迴圈寫入所有 DataFrame
         for title, df in dfs_list:
-            # 寫標題
             ws.write(current_row, 0, f"📌 Table: {title}", fmt_header)
             current_row += 1
             
-            # [NEW] 新增排序說明註解 (Trend 表格除外，因為 Trend 是依日期排序)
             if "Trend" not in title:
                 ws.write(current_row, 0, "   ℹ️ Ranking: Sorted by Spend (High to Low). Last row is Account Average.", fmt_note)
                 current_row += 1
             
-            # 寫入 DataFrame
-            # 使用 pandas to_excel 寫入數據，不包含 index
             df.to_excel(writer, sheet_name=sheet_name, startrow=current_row, index=False)
             
-            # 簡單的 Header 樣式覆蓋 (為了美觀，可選)
             for col_num, value in enumerate(df.columns.values):
                 ws.write(current_row, col_num, value, fmt_table_header)
             
-            # 更新 current_row (數據行數 + Header + 間距)
-            current_row += len(df) + 4 # 留 3 行空白
+            current_row += len(df) + 4
             
-        # 設定欄寬 (概略)
-        ws.set_column('A:A', 40) # 名稱欄寬一點
-        ws.set_column('B:J', 15) # 數值欄
+        ws.set_column('A:A', 40)
+        ws.set_column('B:J', 15)
             
     output.seek(0)
     return output.getvalue()
@@ -236,10 +225,10 @@ def to_excel_single_sheet(dfs_list, prompt_text):
 # 2. Streamlit 顯示組件
 # ==========================================
 
-def display_consolidated_block(df, period_name, period_name_short):
+def display_consolidated_block(df, period_name, period_name_short, conv_col):
     """顯示整合版數據預覽"""
     st.markdown(f"### 🎯 {period_name} 綜合數據概覽")
-    results = collect_all_results_consolidated(df, period_name_short)
+    results = collect_all_results_consolidated(df, period_name_short, conv_col)
     
     st.caption("1. 廣告層級 (Ad Level) - 含所有指標")
     st.dataframe(results[0][1], use_container_width=True, hide_index=True)
@@ -255,30 +244,72 @@ def display_consolidated_block(df, period_name, period_name_short):
 def marketing_analysis_app():
     st.set_page_config(layout="wide", page_title="廣告成效智能分析工具")
     
-    st.title("📊 廣告成效多週期分析工具 (AI Ready)")
+    st.title("📊 廣告成效多週期分析工具 (自訂轉換版)")
     st.markdown("### 🚀 最終進化版：單頁報告模式")
-    st.info("已將所有指令與數據合併為 **單一 Excel 分頁 (Single Sheet)**，採用垂直堆疊格式。這能確保 AI 能夠一次性讀取所有內容，不再發生「讀不到分頁」的問題。")
+    st.info("支援自訂轉換欄位 (例如 free-course, 購買, Leads)，所有指令與數據將合併為 **單一 Excel 分頁**。")
     
     uploaded_file = st.file_uploader("上傳 CSV 檔案", type=["csv"])
 
     if uploaded_file is not None:
         try:
-            # 讀取與清洗
+            # 讀取
             df = pd.read_csv(uploaded_file)
             df.columns = df.columns.str.strip()
+            all_columns = df.columns.tolist()
+
+            # --- [核心] 動態欄位設定區 ---
+            st.markdown("#### 🛠️ 欄位對應設定")
             
-            col_map = {
-                'free course': 'free-course', 'Free course': 'free-course',
-                'Free Course': 'free-course', '花費金額': '花費金額 (TWD)',
-                '金額': '花費金額 (TWD)'
+            # 1. 標準欄位對應 (嘗試自動抓取常見名稱)
+            def find_col(options, default_name):
+                for opt in options:
+                    for col in all_columns:
+                        if opt in col: return col
+                return default_name
+
+            impressions_col = find_col(['曝光次數', '曝光'], '曝光次數')
+            spend_col = find_col(['花費金額 (TWD)', '花費金額', '金額'], '花費金額 (TWD)')
+            clicks_col = find_col(['連結點擊次數', '連結點擊'], '連結點擊次數')
+            
+            # 2. [升級] 轉換欄位智慧選擇
+            # 偵測邏輯：包含 free, course, result, 購買, 轉換 等關鍵字
+            suggested_idx = 0
+            for idx, col in enumerate(all_columns):
+                c_low = col.lower()
+                if '成本' in col or 'cost' in c_low or 'cpa' in c_low: continue
+                
+                if ('free' in c_low and 'course' in c_low): suggested_idx = idx; break
+                if '購買' in col or 'purchase' in c_low: suggested_idx = idx; break
+                if '成果' in col or 'result' in c_low: suggested_idx = idx; break
+                if '轉換' in col: suggested_idx = idx; break
+
+            c1, c2 = st.columns(2)
+            with c1:
+                conversion_col = st.selectbox(
+                    "🎯 請選擇您的目標轉換欄位 (Target Conversion):",
+                    options=all_columns,
+                    index=suggested_idx,
+                    help="系統將根據您選擇的欄位來計算 CVR 與 CPA。"
+                )
+            
+            st.write(f"✅ 分析設定：**花費**={spend_col} | **點擊**={clicks_col} | **轉換**={conversion_col}")
+
+            # 3. 重新命名為標準欄位以利後續處理 (但保留 conversion_col 的原始名稱顯示)
+            # 為了讓程式邏輯簡單，我們將標準欄位 rename，但 conversion_col 保持變數傳遞
+            rename_map = {
+                spend_col: '花費金額 (TWD)',
+                clicks_col: '連結點擊次數',
+                impressions_col: '曝光次數'
             }
-            df.rename(columns=col_map, inplace=True)
+            # 注意：不要 rename conversion_col，我們直接用變數傳遞它
+            df.rename(columns=rename_map, inplace=True)
             
-            # 檢查
-            req_cols = ['天數', '行銷活動名稱', 'free-course', '花費金額 (TWD)', '連結點擊次數', '曝光次數']
+            # 檢查必要欄位 (轉換欄位現在是動態的，只要確認它在裡面即可)
+            req_cols = ['天數', '行銷活動名稱', '花費金額 (TWD)', '連結點擊次數', '曝光次數', conversion_col]
             missing = [c for c in req_cols if c not in df.columns]
+            
             if missing:
-                st.error(f"❌ 缺少欄位: {missing}")
+                st.error(f"❌ 缺少欄位: {missing} (請確認欄位對應是否正確)")
                 st.stop()
 
             # 日期處理
@@ -294,41 +325,41 @@ def marketing_analysis_app():
             pp7d_start = p7d_start - timedelta(days=7)
             pp7d_end = p7d_start - timedelta(days=1)
             p30d_start = today - timedelta(days=30)
-            p30d_end = today - timedelta(days=1) # 確保變數存在
+            p30d_end = today - timedelta(days=1)
             
             df_p7d = df[(df['天數'] >= p7d_start) & (df['天數'] <= p7d_end)].copy()
             df_pp7d = df[(df['天數'] >= pp7d_start) & (df['天數'] <= pp7d_end)].copy()
             df_p30d = df[(df['天數'] >= p30d_start) & (df['天數'] <= p30d_end)].copy()
 
-            # 執行分析與收集 (準備堆疊的數據)
+            # 執行分析與收集 (傳入 conversion_col)
             stacked_data = []
             
             # 1. Trend
-            q13_df = get_trend_data(df_p30d)
+            q13_df = get_trend_data(df_p30d, conversion_col)
             stacked_data.append(('Q13_P30D_Trend (含整體帳戶)', q13_df))
             
             # 2. Periods Data
-            stacked_data.extend(collect_all_results_consolidated(df_p7d, 'P7D'))
-            stacked_data.extend(collect_all_results_consolidated(df_pp7d, 'PP7D'))
-            stacked_data.extend(collect_all_results_consolidated(df_p30d, 'P30D'))
+            stacked_data.extend(collect_all_results_consolidated(df_p7d, 'P7D', conversion_col))
+            stacked_data.extend(collect_all_results_consolidated(df_pp7d, 'PP7D', conversion_col))
+            stacked_data.extend(collect_all_results_consolidated(df_p30d, 'P30D', conversion_col))
 
-            # UI 顯示 (保持分頁瀏覽以便人類閱讀)
+            # UI 顯示
             t1, t2, t3, t4 = st.tabs(["📈 趨勢", "P7D (本週)", "PP7D (上週)", "P30D (月報)"])
             with t1: st.dataframe(q13_df, use_container_width=True)
-            with t2: display_consolidated_block(df_p7d, "P7D", "P7D")
-            with t3: display_consolidated_block(df_pp7d, "PP7D", "PP7D")
-            with t4: display_consolidated_block(df_p30d, "P30D", "P30D")
+            with t2: display_consolidated_block(df_p7d, "P7D", "P7D", conversion_col)
+            with t3: display_consolidated_block(df_pp7d, "PP7D", "PP7D", conversion_col)
+            with t4: display_consolidated_block(df_p30d, "P30D", "P30D", conversion_col)
 
-            # 下載 (單頁版)
+            # 下載
             excel_data = to_excel_single_sheet(stacked_data, AI_CONSULTANT_PROMPT)
             
             st.markdown("### 📥 下載 AI 專用報表")
             st.download_button(
-                label="下載單頁式完整分析報表 (.xlsx)",
+                label=f"下載完整分析報表 (目標: {conversion_col})",
                 data=excel_data,
-                file_name=f"Ad_Analysis_SingleSheet_{max_date.strftime('%Y%m%d')}.xlsx",
+                file_name=f"Ad_Analysis_{conversion_col}_{max_date.strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                help="所有數據與指令都在同一個分頁中，直接上傳給 AI 即可，保證讀取成功。"
+                help="包含所有區間與趨勢數據，已針對您選擇的轉換指標進行計算。"
             )
 
         except Exception as e:
