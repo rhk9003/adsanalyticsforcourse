@@ -56,8 +56,26 @@ AI_CONSULTANT_PROMPT = """
     - 對比不同受眾（AdSet）對同一類素材的反應差異。
 - **輸出重點**: 總結出一個「受眾偏好框架」，並具體建議下一波素材該怎麼做。
 
+## 5. 綜合戰術行動清單 (Consolidated Action Plan) - 最重要的一步
+請將上述所有分析收斂為一份 **「可直接執行的操作清單」**，請務必以表格或列點方式呈現，包含以下三個維度：
+
+### A. 開關操作 (On/Off Decisions)
+- **🔴 應關閉/暫停 (Turn Off)**:
+    - [素材層級]: 具體列出該關閉的爛素材名稱。
+    - [架構層級]: 該暫停的受眾(AdSet)或行銷活動(Campaign)。
+- **🟢 應開啟/加強 (Turn On/Scale)**:
+    - [潛力股]: 建議重新啟動或給予更多機會的項目。
+
+### B. 預算調控 (Budget Allocation)
+- **💰 預算加碼**: 具體建議哪個 Campaign/AdSet 預算應該增加？增加幅度建議？
+- **💸 預算縮減**: 哪個 Campaign/AdSet 預算應該砍半或縮編？
+
+### C. 製作與優化 (Creation & Optimization)
+- **🎨 素材補量**: 根據贏家素材，設計師下一波該做什麼圖？(例如：請多做幾張「I人」切角的圖、多做幾張黃色背景的圖)。
+- **🎯 受眾測試**: 建議測試什麼新興趣、新版位或新方向？
+
 # Output Format
-請以專業顧問報告的形式輸出，使用粗體標示關鍵數據，並在每個分析段落後提供具體的 **「Next Step 行動建議」**。語氣保持客觀、直指核心。
+請以專業顧問報告的形式輸出，使用粗體標示關鍵數據，並確保最後的「綜合戰術行動清單」清晰易讀，讓投手可以按表操課。
 """
 
 # ==========================================
@@ -111,7 +129,7 @@ def calculate_and_rank_metrics(df_group, metric_type, sort_ascending):
             'free-course': 'sum'
         }).reset_index()
         
-        # 2. [NEW] 過濾：排除花費為 0 的項目
+        # 2. 過濾：排除花費為 0 的項目
         df_metrics = df_metrics[df_metrics['花費金額 (TWD)'] > 0]
 
         # 3. 計算個別指標
@@ -130,7 +148,7 @@ def calculate_and_rank_metrics(df_group, metric_type, sort_ascending):
             '連結點擊次數': 'sum'
         }).reset_index()
         
-        # 2. [NEW] 過濾：排除花費為 0 的項目
+        # 2. 過濾：排除花費為 0 的項目
         df_metrics = df_metrics[df_metrics['花費金額 (TWD)'] > 0]
         
         df_metrics['CPC (TWD)'] = df_metrics.apply(lambda x: x['花費金額 (TWD)'] / x['連結點擊次數'] if x['連結點擊次數'] > 0 else np.nan, axis=1)
@@ -148,15 +166,13 @@ def calculate_and_rank_metrics(df_group, metric_type, sort_ascending):
             '花費金額 (TWD)': 'sum' 
         }).reset_index()
         
-        # 2. [NEW] 過濾：排除花費為 0 的項目
+        # 2. 過濾：排除花費為 0 的項目
         df_metrics = df_metrics[df_metrics['花費金額 (TWD)'] > 0]
 
         df_metrics['CTR (%)'] = df_metrics.apply(lambda x: (x['連結點擊次數'] / x['曝光次數']) * 100 if x['曝光次數'] > 0 else 0, axis=1)
         
         df_metrics = df_metrics.sort_values(by='CTR (%)', ascending=sort_ascending).round(2)
         
-        # 移除 '花費金額 (TWD)' 欄位，保持 CTR 表格乾淨 (Summary row calculation needs it though, handle carefully)
-        # create_summary_row 需要花費金額嗎？不需要，CTR 是 clicks / impressions
         summary_row = create_summary_row(df_metrics, 'CTR (%)', '連結點擊次數', '曝光次數', is_percentage=True)
         
         # 在輸出前移除花費欄位 (因為是 CTR 表)
@@ -287,7 +303,7 @@ def display_trend_analysis(df_p30d):
         '曝光次數': 'sum'
     }).reset_index()
 
-    # 過濾掉花費為 0 的天/行銷活動 (可選，但建議讓趨勢圖也乾淨一點)
+    # 過濾掉花費為 0 的天/行銷活動
     campaign_daily_trend = campaign_daily_trend[campaign_daily_trend['花費金額 (TWD)'] > 0]
 
     campaign_daily_trend['CPA (TWD)'] = campaign_daily_trend.apply(lambda x: x['花費金額 (TWD)'] / x['free-course'] if x['free-course'] > 0 else np.nan, axis=1)
@@ -327,20 +343,18 @@ def marketing_analysis_app():
             df = pd.read_csv(uploaded_file)
 
             # --- [FIXED] 智慧欄位名稱標準化 ---
-            # 移除欄位名稱前後空白 (解決 'free course ' 或 ' free course' 的問題)
             df.columns = df.columns.str.strip()
             
-            # 映射字典：將可能的變體映射到程式內部使用的標準名稱
             column_mapping = {
-                'free course': 'free-course',   # 解決 'free course' (有空白)
+                'free course': 'free-course',
                 'Free course': 'free-course',
                 'Free Course': 'free-course',
-                '花費金額': '花費金額 (TWD)',    # 解決可能缺漏的單位標示
+                '花費金額': '花費金額 (TWD)',
                 '金額': '花費金額 (TWD)'
             }
             df.rename(columns=column_mapping, inplace=True)
             
-            # 檢查關鍵欄位是否存在，若不存在給予更明確的錯誤提示
+            # 檢查關鍵欄位是否存在
             required_cols = ['天數', '行銷活動名稱', 'free-course', '花費金額 (TWD)', '連結點擊次數', '曝光次數']
             missing_cols = [c for c in required_cols if c not in df.columns]
             
