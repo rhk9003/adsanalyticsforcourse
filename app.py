@@ -19,6 +19,7 @@ AI_CONSULTANT_PROMPT = """
 - **PP7D**: 上一個 7 天數據（用於做 WoW 環比比較）。
 - **P30D**: 過去 30 天數據（用於看長期趨勢與累積數據）。
 - **Q13_Trend**: 每日趨勢數據 (含 CVR 波動)。
+    - **注意**: 表格中包含 **「🏆 整體帳戶 (Account Overall)」** 的數據，代表當天全帳戶的加總表現，請以此作為宏觀判斷基準。
 - **關鍵指標**: 
     - **CPA (Cost Per Action)**: 每次成果成本 (越低越好)。
     - **CTR (Click-Through Rate)**: 連結點閱率 (越高代表素材越吸睛)。
@@ -31,8 +32,10 @@ AI_CONSULTANT_PROMPT = """
 ## 1. 波動偵測 (Fluctuation Analysis)
 - **目標**: 找出近期表現劇烈變化的項目。
 - **執行動作**:
-    - 對比 Campaign 與 AdSet 層級的 **P7D vs. PP7D** 數據。
-    - **監測 CVR 變化**: 特別標註 CVR **顯著下降 (>20%)** 的項目。這通常是成效惡化的領先指標。
+    - **全站體檢 (Macro Check)**: 首先查看 **Q13_Trend 中的「整體帳戶 (Account Overall)」CVR 走勢**。
+        - 如果 **整體 CVR 驟降**：警告可能為網站故障、追蹤碼失效或市場買氣急凍。
+        - 如果 **整體 CVR 穩定但 CPA 上升**：檢查是否為 CPM (廣告費) 變貴導致。
+    - **細項偵測 (Micro Check)**: 對比 Campaign 與 AdSet 層級的 **P7D vs. PP7D** 數據。
     - 找出 CPA 暴漲（>30%）或 轉單量驟跌的「警示區」。
 - **輸出重點**: 不要只列數字，請告訴我「哪裡變好了？哪裡變壞了？」。
 
@@ -77,7 +80,7 @@ AI_CONSULTANT_PROMPT = """
 
 ### C. 製作與優化 (Creation & Optimization)
 - **🎨 素材補量**: 根據贏家素材，設計師下一波該做什麼圖？
-- **📄 網頁優化 (Landing Page)**: 針對 **High CTR / Low CVR** 的項目，提出落地頁優化假設（例如：是否價格標示不清？是否承諾與內容不符？）。
+- **📄 網頁優化 (Landing Page)**: 針對 **High CTR / Low CVR** 的項目，提出落地頁優化假設。
 - **🎯 受眾測試**: 建議測試什麼新興趣、新版位或新方向？
 
 # Output Format
@@ -284,7 +287,7 @@ def display_analysis_block(df, period_name, period_name_short):
     st.caption("9. 行銷活動 CTR")
     st.dataframe(all_results[8][1], use_container_width=True, hide_index=True)
 
-    # [NEW] 顯示 CVR
+    # 顯示 CVR
     st.subheader("🎯 轉換率 (CVR) 排名 - 高到低")
     st.markdown("*(公式：成果數 / 連結點擊次數)*")
     st.caption("10. 廣告 CVR")
@@ -300,10 +303,12 @@ def display_trend_analysis(df_p30d):
     
     st.header("📈 趨勢與波動檢視 (Q13) - 過去 30 天")
     st.markdown("以**每日**的**行銷活動**為基礎，檢視 CPA、CTR 與 **CVR** 的波動情況。")
+    st.info("💡 表格中包含 **「🏆 整體帳戶 (Account Overall)」**，代表當天全帳戶的加總表現。")
     
     trend_df = df_p30d.copy()
     trend_df['廣告名稱_clean'] = trend_df['廣告名稱'].apply(clean_ad_name)
 
+    # 1. 行銷活動層級 (Campaign Level)
     campaign_daily_trend = trend_df.groupby(['天數', '行銷活動名稱']).agg({
         '花費金額 (TWD)': 'sum',
         'free-course': 'sum',
@@ -311,19 +316,36 @@ def display_trend_analysis(df_p30d):
         '曝光次數': 'sum'
     }).reset_index()
 
-    # 過濾掉花費為 0 的天/行銷活動
-    campaign_daily_trend = campaign_daily_trend[campaign_daily_trend['花費金額 (TWD)'] > 0]
+    # 2. [NEW] 帳戶層級 (Account Level) - 計算大盤趨勢
+    account_daily_trend = trend_df.groupby(['天數']).agg({
+        '花費金額 (TWD)': 'sum',
+        'free-course': 'sum',
+        '連結點擊次數': 'sum',
+        '曝光次數': 'sum'
+    }).reset_index()
+    account_daily_trend['行銷活動名稱'] = '🏆 整體帳戶 (Account Overall)' # 特殊命名以利識別
 
-    campaign_daily_trend['CPA (TWD)'] = campaign_daily_trend.apply(lambda x: x['花費金額 (TWD)'] / x['free-course'] if x['free-course'] > 0 else np.nan, axis=1)
-    campaign_daily_trend['CTR (%)'] = campaign_daily_trend.apply(lambda x: (x['連結點擊次數'] / x['曝光次數']) * 100 if x['曝光次數'] > 0 else 0, axis=1)
-    # [NEW] CVR Trend
-    campaign_daily_trend['CVR (%)'] = campaign_daily_trend.apply(lambda x: (x['free-course'] / x['連結點擊次數']) * 100 if x['連結點擊次數'] > 0 else 0, axis=1)
+    # 3. 合併兩者
+    final_trend = pd.concat([account_daily_trend, campaign_daily_trend], ignore_index=True)
+
+    # 過濾掉花費為 0 的天/行銷活動
+    final_trend = final_trend[final_trend['花費金額 (TWD)'] > 0]
+
+    # 計算指標
+    final_trend['CPA (TWD)'] = final_trend.apply(lambda x: x['花費金額 (TWD)'] / x['free-course'] if x['free-course'] > 0 else np.nan, axis=1)
+    final_trend['CTR (%)'] = final_trend.apply(lambda x: (x['連結點擊次數'] / x['曝光次數']) * 100 if x['曝光次數'] > 0 else 0, axis=1)
+    final_trend['CVR (%)'] = final_trend.apply(lambda x: (x['free-course'] / x['連結點擊次數']) * 100 if x['連結點擊次數'] > 0 else 0, axis=1)
     
     # 格式化輸出
-    campaign_daily_trend['天數'] = campaign_daily_trend['天數'].dt.strftime('%Y-%m-%d')
-    campaign_daily_trend.replace([np.inf, -np.inf], np.nan, inplace=True)
+    final_trend['天數'] = final_trend['天數'].dt.strftime('%Y-%m-%d')
+    final_trend.replace([np.inf, -np.inf], np.nan, inplace=True)
     
-    trend_output_df = campaign_daily_trend[['天數', '行銷活動名稱', '花費金額 (TWD)', 'free-course', 'CPA (TWD)', 'CTR (%)', 'CVR (%)']].round(2)
+    # 排序：讓每一天的 "整體帳戶" 排在最前面，或者依日期排序
+    # 這裡選擇依日期排序，相同日期下，'🏆' 會因為 Unicode 排序而在特殊位置 (視系統而定)，
+    # 但為了保險，我們可以 secondary sort by 行銷活動名稱
+    final_trend = final_trend.sort_values(by=['天數', '行銷活動名稱'])
+
+    trend_output_df = final_trend[['天數', '行銷活動名稱', '花費金額 (TWD)', 'free-course', 'CPA (TWD)', 'CTR (%)', 'CVR (%)']].round(2)
     
     st.dataframe(trend_output_df, use_container_width=True, hide_index=True)
     
