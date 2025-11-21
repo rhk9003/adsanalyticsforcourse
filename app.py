@@ -26,6 +26,13 @@ The user has uploaded a **Single-Sheet Excel File**.
 # Role
 你是一位擁有 10 年經驗的資深成效廣告分析師。請根據本頁面中的所有數據進行帳戶健檢。
 
+# Data Structure & Sorting Logic
+- **Q13_Trend**: 依日期排序的每日趨勢。
+- **Consolidated Tables (P7D/PP7D/P30D)**:
+    - 這些表格預設 **「依花費金額 (Spend) 由高到低排名」**。
+    - **分析重點**: 請優先關注排名前 3-5 名的「高花費項目」，它們對整體帳戶影響最大。
+    - 表格最後一列通常是 **「全帳戶平均 (Account Average)」**，請以此作為基準線 (Benchmark)。
+
 # Analysis Requirements
 
 ## 1. 波動偵測 (Fluctuation Analysis)
@@ -179,6 +186,7 @@ def to_excel_single_sheet(dfs_list, prompt_text):
         # 格式設定
         fmt_prompt = workbook.add_format({'text_wrap': True, 'valign': 'top', 'font_size': 11, 'bg_color': '#F0F2F6'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 14, 'font_color': '#0068C9'})
+        fmt_note = workbook.add_format({'italic': True, 'font_size': 10, 'font_color': '#555555'}) # [NEW] 註解格式
         fmt_table_header = workbook.add_format({'bold': True, 'bg_color': '#E6E6E6', 'border': 1})
         
         current_row = 0
@@ -200,6 +208,11 @@ def to_excel_single_sheet(dfs_list, prompt_text):
             # 寫標題
             ws.write(current_row, 0, f"📌 Table: {title}", fmt_header)
             current_row += 1
+            
+            # [NEW] 新增排序說明註解 (Trend 表格除外，因為 Trend 是依日期排序)
+            if "Trend" not in title:
+                ws.write(current_row, 0, "   ℹ️ Ranking: Sorted by Spend (High to Low). Last row is Account Average.", fmt_note)
+                current_row += 1
             
             # 寫入 DataFrame
             # 使用 pandas to_excel 寫入數據，不包含 index
@@ -281,7 +294,7 @@ def marketing_analysis_app():
             pp7d_start = p7d_start - timedelta(days=7)
             pp7d_end = p7d_start - timedelta(days=1)
             p30d_start = today - timedelta(days=30)
-            p30d_end = today - timedelta(days=1) # [FIXED] 補上缺少的變數定義
+            p30d_end = today - timedelta(days=1) # 確保變數存在
             
             df_p7d = df[(df['天數'] >= p7d_start) & (df['天數'] <= p7d_end)].copy()
             df_pp7d = df[(df['天數'] >= pp7d_start) & (df['天數'] <= pp7d_end)].copy()
