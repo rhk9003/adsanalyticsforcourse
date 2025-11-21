@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import io
 
 # ==========================================
-# 0. 全域設定：AI 顧問指令 (完整修復版)
+# 0. 全域設定：AI 顧問指令 (完整版)
 # ==========================================
 AI_CONSULTANT_PROMPT = """
 # ⚠️ SYSTEM OVERRIDE: DATA LOADING INSTRUCTION
@@ -66,7 +66,7 @@ The user has uploaded a **Single-Sheet Excel File**.
 # ==========================================
 # 1. 基礎設定與字型處理
 # ==========================================
-st.set_page_config(page_title="廣告成效全能分析 v4.1", layout="wide")
+st.set_page_config(page_title="廣告成效全能分析 v4.2", layout="wide")
 
 @st.cache_resource
 def get_chinese_font():
@@ -145,6 +145,7 @@ def calculate_metrics_consolidated(df_group, conv_col):
 def prepare_excel_data(df, period_name_short, conv_col):
     """準備 Excel 用的數據塊"""
     df['廣告名稱_clean'] = df['廣告名稱'].apply(clean_ad_name)
+    # 再次確保數值安全 (雖然主程式已清洗，但防呆)
     cols = [conv_col, '花費金額 (TWD)', '連結點擊次數', '曝光次數']
     df[cols] = df[cols].fillna(0)
     
@@ -215,7 +216,7 @@ def generate_single_sheet_excel(dfs_list, prompt_text):
 # ==========================================
 # 3. 主程式 UI 邏輯
 # ==========================================
-st.title("📊 廣告成效全能分析儀表板 (v4.1 完整指令版)")
+st.title("📊 廣告成效全能分析儀表板 (v4.2 數據清洗版)")
 st.caption("整合功能：每日趨勢可視化 + 詳細數據表格 + AI 專用單頁報表匯出")
 
 uploaded_file = st.file_uploader("請上傳 CSV 報表檔案", type=['csv'])
@@ -260,9 +261,19 @@ if uploaded_file is not None:
             
             st.info(f"已鎖定：\n💰 花費: {spend_col}\n🖱️ 點擊: {clicks_col}\n👀 曝光: {impressions_col}")
 
-        # 2. 資料清洗
-        req_cols = [spend_col, clicks_col, impressions_col, conversion_col]
-        df[req_cols] = df[req_cols].fillna(0)
+        # --- [關鍵修復] 2. 強力數據清洗 ---
+        # 在任何計算開始前，先強制將字串轉為數字
+        cols_to_numeric = [spend_col, clicks_col, impressions_col, conversion_col]
+        for col in cols_to_numeric:
+            # 如果是字串類型，先去除逗號等符號
+            if df[col].dtype == 'object':
+                df[col] = df[col].astype(str).str.replace(',', '', regex=False)
+            # 強制轉數字，無法轉的 (如 "-") 變成 NaN
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+        # 將 NaN 補 0
+        df[cols_to_numeric] = df[cols_to_numeric].fillna(0)
+
         df['天數'] = pd.to_datetime(df['天數'])
         
         # 標準化欄位名稱 (方便後續處理，除了 conversion_col)
@@ -394,4 +405,4 @@ if uploaded_file is not None:
 
     except Exception as e:
         st.error(f"發生錯誤: {e}")
-        st.info("請確認 CSV 檔案格式正確，且包含花費、點擊與轉換數據。")
+        st.info("若問題持續發生，請確認您的報表欄位名稱是否與設定相符。")
