@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import io
 
 # ==========================================
-# 0. 全域設定：AI 顧問指令 (完整版)
+# 0. 全域設定：AI 顧問指令 (已更新 P1D 邏輯)
 # ==========================================
 AI_CONSULTANT_PROMPT = """
 # ⚠️ SYSTEM OVERRIDE: DATA LOADING INSTRUCTION
@@ -21,7 +21,7 @@ The user has uploaded a **Single-Sheet Excel File**.
 3. The structure is:
    - **[Top Section]**: This Instruction (Prompt).
    - **[Middle Section]**: Q13_Trend Data (Daily Trend).
-   - **[Bottom Section]**: Consolidated Data Tables for P7D, PP7D, and P30D (Campaign/AdSet/Ad levels).
+   - **[Bottom Section]**: Consolidated Data Tables for P1D, P7D, PP7D, and P30D.
 4. **ACTION**: Please read the entire sheet. Scan for headers like "Table: ..." to identify different datasets.
 
 ---
@@ -31,28 +31,33 @@ The user has uploaded a **Single-Sheet Excel File**.
 
 # Data Structure & Sorting Logic
 - **Q13_Trend**: 依日期排序的每日趨勢。
-- **Consolidated Tables (P7D/PP7D/P30D)**:
+- **Consolidated Tables (P1D/P7D/PP7D/P30D)**:
     - 這些表格預設 **「依花費金額 (Spend) 由高到低排名」**。
-    - **分析重點**: 請優先關注排名前 3-5 名的「高花費項目」，它們對整體帳戶影響最大。
-    - 表格最後一列通常是 **「全帳戶平均 (Account Average)」**，請以此作為基準線 (Benchmark)。
+    - **P1D (最新一日)**: 代表昨天的即時成效。
+    - **P7D (過去七天)**: 代表近期的穩定基準 (Baseline)。
 
 # Analysis Requirements
 
-## 1. 波動偵測 (Fluctuation Analysis)
-- **全站體檢**: 優先查看上方 `Q13_Trend` 表格中的 **「🏆 整體帳戶」** 趨勢線，判斷整體 CVR 與 CPA 走勢。
-- **細項對比**: 往下捲動，找到 **P7D (本週)** 與 **PP7D (上週)** 的表格進行環比分析。
-- 找出 CPA 暴漲或 CVR 驟降的「警示區」。
+## 1. 🚨 緊急趨勢偵測 (P1D vs P7D Alert)
+**這是最重要的部分。** 請對比 **P1D (昨日)** 與 **P7D (平均水準)** 的數據：
+- **CTR 異常**: 如果 P1D CTR 比 P7D 低超過 20%，標記為「⚠️ 點擊率驟降 (Creative Fatigue)」。
+- **CPA 異常**: 如果 P1D CPA 比 P7D 高超過 30%，標記為「💸 成本暴漲 (Cost Spike)」。
+- **CVR 異常**: 如果 P1D CVR 趨近於 0 但花費持續，標記為「🛑 轉換中斷 (Zero Conversion)」。
+請列出發生上述狀況的具體「行銷活動」或「廣告」。
 
-## 2. 擴量機會 (Scaling)
+## 2. 波動偵測 (Fluctuation Analysis)
+- 查看上方 `Q13_Trend` 表格中的 **「🏆 整體帳戶」** 趨勢線。
+- 觀察 PP7D (上週) 到 P7D (本週) 的整體變化趨勢。
+
+## 3. 擴量機會 (Scaling)
 - 找出 **CPA 低且穩定** 的行銷活動/廣告組合 -> 建議加碼。
 - 找出 **High CTR / Low Spend** 的潛力素材 -> 建議給予獨立預算。
-- 找出 **High CTR / Low CVR** 的項目 -> 建議優化落地頁。
 
-## 3. 止損建議 (Cost Cutting)
+## 4. 止損建議 (Cost Cutting)
 - 找出 **高花費 but 0 轉換** 的項目。
 - 找出 **CPA 過高且 CTR 低落** 的無效廣告。
 
-## 4. 綜合戰術行動清單 (Action Plan)
+## 5. 綜合戰術行動清單 (Action Plan)
 請列出具體的：
 - **🔴 應關閉**: 具體列出該關閉的素材/受眾名稱。
 - **🟢 應加強**: 具體列出該加碼的項目。
@@ -60,13 +65,13 @@ The user has uploaded a **Single-Sheet Excel File**.
 - **🎨 素材/網頁優化**: 下一步該做什麼圖？該改什麼文案？
 
 # Output Format
-請輸出專業分析報告，並確保「戰術行動清單」清晰可執行。
+請輸出專業分析報告，優先輸出 **「🚨 P1D 緊急警示」** 區塊，再進行一般週報分析。
 """
 
 # ==========================================
 # 1. 基礎設定與字型處理
 # ==========================================
-st.set_page_config(page_title="廣告成效全能分析 v5.0", layout="wide")
+st.set_page_config(page_title="廣告成效全能分析 v5.1 (含P1D監控)", layout="wide")
 
 @st.cache_resource
 def get_chinese_font():
@@ -151,7 +156,7 @@ def calculate_consolidated_metrics(df_group, conv_col):
         return df_metrics
 
 def collect_period_results(df, period_name_short, conv_col):
-    """收集該區間 (P7D/PP7D/P30D) 下的三種層級報表"""
+    """收集該區間 (P1D/P7D/PP7D/P30D) 下的三種層級報表"""
     # 廣告名稱清洗
     df['廣告名稱_clean'] = df['廣告名稱'].apply(clean_ad_name)
     
@@ -189,7 +194,7 @@ def get_trend_data_excel(df_p30d, conv_col):
     return final_trend.round(2).sort_values(by=['天數', '行銷活動名稱'])
 
 def to_excel_single_sheet_stacked(dfs_list, prompt_text):
-    """將多個 DataFrame 垂直堆疊寫入同一個 Excel Sheet (核心功能)"""
+    """將多個 DataFrame 垂直堆疊寫入同一個 Excel Sheet"""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
@@ -242,8 +247,8 @@ def to_excel_single_sheet_stacked(dfs_list, prompt_text):
 # ==========================================
 # 3. 主程式 UI
 # ==========================================
-st.title("📊 廣告成效全能分析儀表板 (v5.0 完全體)")
-st.caption("功能：視覺化戰情室 + 多週期比較 (P7D/PP7D) + AI 專用單頁報表 (垂直堆疊)")
+st.title("📊 廣告成效全能分析儀表板 (v5.1 P1D監控版)")
+st.caption("功能：P1D vs P7D 異常監控 + AI 專用單頁報表 (垂直堆疊)")
 
 uploaded_file = st.file_uploader("請上傳 CSV 報表檔案", type=['csv'])
 
@@ -297,7 +302,7 @@ if uploaded_file is not None:
 
         df['天數'] = pd.to_datetime(df['天數'])
         
-        # 標準化欄位名稱 (方便主程式邏輯，但 conversion_col 保持原樣)
+        # 標準化欄位名稱
         df_std = df.rename(columns={
             spend_col: '花費金額 (TWD)',
             clicks_col: '連結點擊次數',
@@ -308,6 +313,10 @@ if uploaded_file is not None:
         max_date = df_std['天數'].max().normalize()
         today = max_date + timedelta(days=1)
         
+        # P1D (昨日/報表最後一日)
+        p1d_start = max_date
+        p1d_end = max_date
+
         p7d_start = today - timedelta(days=7)
         p7d_end = today - timedelta(days=1)
         
@@ -317,6 +326,7 @@ if uploaded_file is not None:
         p30d_start = today - timedelta(days=30)
         p30d_end = today - timedelta(days=1)
         
+        df_p1d = df_std[(df_std['天數'] >= p1d_start) & (df_std['天數'] <= p1d_end)].copy()
         df_p7d = df_std[(df_std['天數'] >= p7d_start) & (df_std['天數'] <= p7d_end)].copy()
         df_pp7d = df_std[(df_std['天數'] >= pp7d_start) & (df_std['天數'] <= pp7d_end)].copy()
         df_p30d = df_std[(df_std['天數'] >= p30d_start) & (df_std['天數'] <= p30d_end)].copy()
@@ -371,21 +381,24 @@ if uploaded_file is not None:
             plt.tight_layout()
             st.pyplot(fig)
 
-        # === TAB 2: 詳細數據預覽 ===
+        # === TAB 2: 詳細數據預覽 (加入 P1D Tab) ===
         with tab2:
             st.markdown("### 數據預覽 (詳細版請下載 Excel)")
-            t_p7, t_pp7, t_p30 = st.tabs(["P7D (本週)", "PP7D (上週)", "P30D (月報)"])
+            t_p1, t_p7, t_pp7, t_p30 = st.tabs(["P1D (昨日)", "P7D (本週)", "PP7D (上週)", "P30D (月報)"])
             
-            # 為了預覽，我們只顯示 P7D 的部分內容
+            res_p1 = collect_period_results(df_p1d, 'P1D', conversion_col)
             res_p7 = collect_period_results(df_p7d, 'P7D', conversion_col)
             res_pp7 = collect_period_results(df_pp7d, 'PP7D', conversion_col)
             res_p30 = collect_period_results(df_p30d, 'P30D', conversion_col)
             
+            with t_p1: 
+                st.caption(f"📅 資料日期: {max_date.strftime('%Y-%m-%d')}")
+                st.dataframe(res_p1[2][1], use_container_width=True)
             with t_p7: st.dataframe(res_p7[2][1], use_container_width=True)
             with t_pp7: st.dataframe(res_pp7[2][1], use_container_width=True)
             with t_p30: st.dataframe(res_p30[2][1], use_container_width=True)
 
-        # === 側邊欄下載區 (核心功能) ===
+        # === 側邊欄下載區 (加入 P1D) ===
         with st.sidebar:
             st.divider()
             st.header("📥 AI 報表下載")
@@ -395,7 +408,8 @@ if uploaded_file is not None:
             excel_stack = []
             # 1. Trend
             excel_stack.append(('Q13_Trend', get_trend_data_excel(df_p30d, conversion_col)))
-            # 2. Periods (這就是您之前要的功能)
+            # 2. Periods (加入 P1D)
+            excel_stack.extend(collect_period_results(df_p1d, 'P1D', conversion_col))
             excel_stack.extend(collect_period_results(df_p7d, 'P7D', conversion_col))
             excel_stack.extend(collect_period_results(df_pp7d, 'PP7D', conversion_col))
             excel_stack.extend(collect_period_results(df_p30d, 'P30D', conversion_col))
@@ -407,7 +421,7 @@ if uploaded_file is not None:
                 data=excel_bytes,
                 file_name=f"Full_AI_Report_{conversion_col}_{max_date.strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                help="此檔案包含 P7D/PP7D/P30D 所有層級數據，並已嵌入 AI 分析指令。"
+                help="包含 P1D/P7D/PP7D/P30D 所有數據，用於 ChatGPT/Claude 分析。"
             )
 
     except Exception as e:
