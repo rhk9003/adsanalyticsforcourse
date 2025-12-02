@@ -40,9 +40,9 @@ The user has uploaded a **Single-Sheet Excel File**.
 """
 
 # ==========================================
-# 1. 基礎設定與字型處理
+# 1. 基礎設定與字型處理 (優化版)
 # ==========================================
-st.set_page_config(page_title="廣告成效全能分析 v5.3 (雙重監控版)", layout="wide")
+st.set_page_config(page_title="廣告成效全能分析 v5.4 (智能編碼版)", layout="wide")
 
 @st.cache_resource
 def get_chinese_font():
@@ -51,8 +51,10 @@ def get_chinese_font():
     if not os.path.exists(font_path):
         try:
             with st.spinner('正在下載中文字型 (首次執行需時較久)...'):
+                # 設定 timeout 避免卡死
                 urllib.request.urlretrieve(url, font_path)
-        except:
+        except Exception as e:
+            # st.warning(f"字型下載失敗，將使用系統預設字型: {e}")
             return None
     return fm.FontProperties(fname=font_path)
 
@@ -125,7 +127,7 @@ def collect_period_results(df, period_name_short, conv_col):
     return results
 
 # ==========================================
-# 3. 異常偵測與趨勢分析邏輯 (更新版)
+# 3. 異常偵測與趨勢分析邏輯
 # ==========================================
 
 def check_daily_anomalies(df_p1, df_p7, level_name='行銷活動名稱'):
@@ -265,16 +267,26 @@ def to_excel_single_sheet_stacked(dfs_list, prompt_text):
     return output.getvalue()
 
 # ==========================================
-# 4. 主程式 UI
+# 4. 主程式 UI (核心修正：加入編碼判斷)
 # ==========================================
-st.title("📊 廣告成效全能分析 v5.3 (雙重監控版)")
+st.title("📊 廣告成效全能分析 v5.4 (智能編碼版)")
 
 uploaded_file = st.file_uploader("請上傳 CSV 報表檔案", type=['csv'])
 
 if uploaded_file is not None:
     try:
-        # 1. 讀取與欄位偵測
-        df = pd.read_csv(uploaded_file)
+        # 1. 讀取與欄位偵測 (修正：自動判斷 UTF-8 或 CP950/Big5)
+        try:
+            # 先試試看標準格式
+            df = pd.read_csv(uploaded_file, encoding='utf-8')
+        except UnicodeDecodeError:
+            # 如果失敗，重置指標並嘗試 Big5 (Excel 傳統格式)
+            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, encoding='cp950')
+        except Exception as e:
+            st.error(f"檔案讀取未知的錯誤: {e}")
+            st.stop()
+
         df.columns = df.columns.str.strip()
         all_columns = df.columns.tolist()
         
@@ -308,7 +320,15 @@ if uploaded_file is not None:
                     df[col] = df[col].astype(str).str.replace(',', '', regex=False)
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-        df['天數'] = pd.to_datetime(df['天數'])
+        # 修正：日期解析加入錯誤強制處理 (coerce)，避免彙總行報錯
+        if '天數' not in df.columns:
+             st.error("錯誤：CSV 檔案中找不到「天數」欄位，請檢查檔案格式。")
+             st.stop()
+
+        df['天數'] = pd.to_datetime(df['天數'], errors='coerce')
+        # 移除日期解析失敗的列 (例如 Excel 尾端的 'Total' 或 '彙總')
+        df = df.dropna(subset=['天數']) 
+
         df_std = df.rename(columns={
             spend_col: '花費金額 (TWD)',
             clicks_col: '連結點擊次數',
@@ -316,6 +336,10 @@ if uploaded_file is not None:
         })
         
         # 3. 日期區間與資料分組
+        if df_std.empty:
+            st.error("錯誤：資料經過清洗後為空，請檢查原始檔案是否包含有效的日期與數據。")
+            st.stop()
+
         max_date = df_std['天數'].max().normalize()
         today = max_date + timedelta(days=1)
         
@@ -429,5 +453,5 @@ if uploaded_file is not None:
             )
 
     except Exception as e:
-        st.error(f"發生錯誤: {e}")
+        st.error(f"系統發生未預期的錯誤: {e}")
         st.write("建議檢查：1. CSV格式是否正確 2. 是否包含轉換/花費欄位")
