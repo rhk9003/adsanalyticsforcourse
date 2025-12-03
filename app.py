@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import io
 
 # ==========================================
-# 0. 全域設定：AI 顧問指令 (新增週環比指令)
+# 0. 全域設定：AI 顧問指令
 # ==========================================
 AI_CONSULTANT_PROMPT = """
 # ⚠️ SYSTEM OVERRIDE: DATA LOADING INSTRUCTION
@@ -40,9 +40,9 @@ The user has uploaded a **Single-Sheet Excel File**.
 """
 
 # ==========================================
-# 1. 基礎設定與字型處理 (優化版)
+# 1. 基礎設定與字型處理
 # ==========================================
-st.set_page_config(page_title="廣告成效全能分析 v5.4 (智能編碼版)", layout="wide")
+st.set_page_config(page_title="廣告成效全能分析 v5.5 (詳細層級版)", layout="wide")
 
 @st.cache_resource
 def get_chinese_font():
@@ -51,10 +51,8 @@ def get_chinese_font():
     if not os.path.exists(font_path):
         try:
             with st.spinner('正在下載中文字型 (首次執行需時較久)...'):
-                # 設定 timeout 避免卡死
                 urllib.request.urlretrieve(url, font_path)
         except Exception as e:
-            # st.warning(f"字型下載失敗，將使用系統預設字型: {e}")
             return None
     return fm.FontProperties(fname=font_path)
 
@@ -121,9 +119,14 @@ def calculate_consolidated_metrics(df_group, conv_col):
 def collect_period_results(df, period_name_short, conv_col):
     df['廣告名稱_clean'] = df['廣告名稱'].apply(clean_ad_name)
     results = []
+    # 0. 廣告層級 (聚合相同名稱的廣告)
     results.append((f'{period_name_short}_Ad_廣告', calculate_consolidated_metrics(df.groupby('廣告名稱_clean'), conv_col)))
+    # 1. 廣告組合層級
     results.append((f'{period_name_short}_AdSet_廣告組合', calculate_consolidated_metrics(df.groupby(['行銷活動名稱', '廣告組合名稱']), conv_col)))
+    # 2. 行銷活動層級
     results.append((f'{period_name_short}_Campaign_行銷活動', calculate_consolidated_metrics(df.groupby('行銷活動名稱'), conv_col)))
+    # 3. [NEW] 詳細層級 (行銷活動 > 廣告組合 > 廣告)
+    results.append((f'{period_name_short}_Detail_詳細(組合+廣告)', calculate_consolidated_metrics(df.groupby(['行銷活動名稱', '廣告組合名稱', '廣告名稱']), conv_col)))
     return results
 
 # ==========================================
@@ -131,9 +134,6 @@ def collect_period_results(df, period_name_short, conv_col):
 # ==========================================
 
 def check_daily_anomalies(df_p1, df_p7, level_name='行銷活動名稱'):
-    """
-    P1D vs P7D: 針對「昨日」的緊急檢查
-    """
     p1 = df_p1[df_p1[level_name] != '全帳戶平均'].copy()
     p7 = df_p7[df_p7[level_name] != '全帳戶平均'].copy()
     
@@ -143,26 +143,23 @@ def check_daily_anomalies(df_p1, df_p7, level_name='行銷活動名稱'):
     alerts = []
     
     for _, row in merged.iterrows():
-        if row['花費金額 (TWD)_P1'] < 200: continue # 忽略小額
+        if row['花費金額 (TWD)_P1'] < 200: continue 
 
         name = row[level_name]
         cpa_p1, cpa_p7 = row['CPA (TWD)_P1'], row['CPA (TWD)_P7']
         ctr_p1, ctr_p7 = row['CTR (%)_P1'], row['CTR (%)_P7']
         spend_p1 = row['花費金額 (TWD)_P1']
 
-        # 1. CPA 暴漲 (昨日 > 7日均值 + 30%)
         if cpa_p7 > 0 and cpa_p1 > cpa_p7 * 1.3:
             diff = int(((cpa_p1 - cpa_p7) / cpa_p7) * 100)
             alerts.append({'層級': level_name, '名稱': name, '類型': '🔴 CPA 暴漲', 
                            '數據對比': f"昨${cpa_p1:.0f} vs 均${cpa_p7:.0f} (🔺{diff}%)", '建議': '檢查競價或受眾'})
             
-        # 2. CTR 驟降 (昨日 < 7日均值 - 20%)
         if ctr_p7 > 0 and ctr_p1 < ctr_p7 * 0.8:
             diff = int(((ctr_p7 - ctr_p1) / ctr_p7) * 100)
             alerts.append({'層級': level_name, '名稱': name, '類型': '📉 CTR 驟降', 
                            '數據對比': f"昨{ctr_p1}% vs 均{ctr_p7}% (🔻{diff}%)", '建議': '素材疲乏/更換素材'})
             
-        # 3. 0 轉換
         if cpa_p1 == 0 and spend_p1 > 500:
              alerts.append({'層級': level_name, '名稱': name, '類型': '🛑 高花費0轉換', 
                             '數據對比': f"昨花費 ${spend_p1:.0f}", '建議': '檢查落地頁/設定'})
@@ -170,9 +167,6 @@ def check_daily_anomalies(df_p1, df_p7, level_name='行銷活動名稱'):
     return pd.DataFrame(alerts)
 
 def check_weekly_trends(df_p7, df_pp7, level_name='行銷活動名稱'):
-    """
-    P7D vs PP7D: 針對「本週」的趨勢比較 (找出衰退項目)
-    """
     curr = df_p7[df_p7[level_name] != '全帳戶平均'].copy()
     prev = df_pp7[df_pp7[level_name] != '全帳戶平均'].copy()
     
@@ -182,7 +176,6 @@ def check_weekly_trends(df_p7, df_pp7, level_name='行銷活動名稱'):
     trends = []
     
     for _, row in merged.iterrows():
-        # 至少本週花費要大於 1000 才納入趨勢分析
         if row['花費金額 (TWD)_This'] < 1000: continue
         
         name = row[level_name]
@@ -190,7 +183,6 @@ def check_weekly_trends(df_p7, df_pp7, level_name='行銷活動名稱'):
         ctr_this, ctr_last = row['CTR (%)_This'], row['CTR (%)_Last']
         spend_this, spend_last = row['花費金額 (TWD)_This'], row['花費金額 (TWD)_Last']
         
-        # 1. 成本顯著變貴 (WoW CPA 惡化 > 20%)
         if cpa_last > 0 and cpa_this > cpa_last * 1.2:
             diff = int(((cpa_this - cpa_last) / cpa_last) * 100)
             trends.append({
@@ -200,7 +192,6 @@ def check_weekly_trends(df_p7, df_pp7, level_name='行銷活動名稱'):
                 '診斷': '競爭加劇或轉換率下降'
             })
             
-        # 2. 點擊率顯著下滑 (WoW CTR 下滑 > 15%)
         if ctr_last > 0 and ctr_this < ctr_last * 0.85:
             diff = int(((ctr_last - ctr_this) / ctr_last) * 100)
             trends.append({
@@ -210,7 +201,6 @@ def check_weekly_trends(df_p7, df_pp7, level_name='行銷活動名稱'):
                 '診斷': '素材開始老化'
             })
 
-        # 3. 擴量但成效變差 (花費增加 > 20% 且 CPA 增加 > 10%)
         if spend_last > 0 and spend_this > spend_last * 1.2:
             if cpa_last > 0 and cpa_this > cpa_last * 1.1:
                 trends.append({
@@ -267,20 +257,18 @@ def to_excel_single_sheet_stacked(dfs_list, prompt_text):
     return output.getvalue()
 
 # ==========================================
-# 4. 主程式 UI (核心修正：加入編碼判斷)
+# 4. 主程式 UI
 # ==========================================
-st.title("📊 廣告成效全能分析 v5.4 (智能編碼版)")
+st.title("📊 廣告成效全能分析 v5.5 (詳細層級版)")
 
 uploaded_file = st.file_uploader("請上傳 CSV 報表檔案", type=['csv'])
 
 if uploaded_file is not None:
     try:
-        # 1. 讀取與欄位偵測 (修正：自動判斷 UTF-8 或 CP950/Big5)
+        # 1. 讀取與欄位偵測
         try:
-            # 先試試看標準格式
             df = pd.read_csv(uploaded_file, encoding='utf-8')
         except UnicodeDecodeError:
-            # 如果失敗，重置指標並嘗試 Big5 (Excel 傳統格式)
             uploaded_file.seek(0)
             df = pd.read_csv(uploaded_file, encoding='cp950')
         except Exception as e:
@@ -320,13 +308,11 @@ if uploaded_file is not None:
                     df[col] = df[col].astype(str).str.replace(',', '', regex=False)
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-        # 修正：日期解析加入錯誤強制處理 (coerce)，避免彙總行報錯
         if '天數' not in df.columns:
              st.error("錯誤：CSV 檔案中找不到「天數」欄位，請檢查檔案格式。")
              st.stop()
 
         df['天數'] = pd.to_datetime(df['天數'], errors='coerce')
-        # 移除日期解析失敗的列 (例如 Excel 尾端的 'Total' 或 '彙總')
         df = df.dropna(subset=['天數']) 
 
         df_std = df.rename(columns={
@@ -350,7 +336,7 @@ if uploaded_file is not None:
         # P7D & PP7D
         p7d_start = today - timedelta(days=7)
         p7d_end = today - timedelta(days=1)
-        pp7d_start = p7d_start - timedelta(days=7) # 上週
+        pp7d_start = p7d_start - timedelta(days=7)
         pp7d_end = p7d_start - timedelta(days=1)
         p30d_start = today - timedelta(days=30)
         p30d_end = today - timedelta(days=1)
@@ -359,17 +345,17 @@ if uploaded_file is not None:
         df_pp7d = df_std[(df_std['天數'] >= pp7d_start) & (df_std['天數'] <= pp7d_end)].copy()
         df_p30d = df_std[(df_std['天數'] >= p30d_start) & (df_std['天數'] <= p30d_end)].copy()
         
-        # 計算各區間數據 (行銷活動層級，用於偵測)
+        # 計算各區間數據
         res_p1d_camp = calculate_consolidated_metrics(df_p1d.groupby('行銷活動名稱'), conversion_col)
         res_p7d_camp = calculate_consolidated_metrics(df_p7d.groupby('行銷活動名稱'), conversion_col)
         res_pp7d_camp = calculate_consolidated_metrics(df_pp7d.groupby('行銷活動名稱'), conversion_col)
         
-        # === 核心：產生兩份警示表 ===
+        # === 核心：產生警示表 ===
         alerts_daily = check_daily_anomalies(res_p1d_camp, res_p7d_camp, '行銷活動名稱')
         alerts_weekly = check_weekly_trends(res_p7d_camp, res_pp7d_camp, '行銷活動名稱')
 
         # --- UI 呈現 ---
-        tab1, tab2 = st.tabs(["📈 戰情室 & 雙重監控", "📑 詳細數據表"])
+        tab1, tab2 = st.tabs(["📈 戰情室 & 雙重監控", "📑 詳細數據表 (可切換層級)"])
         
         with tab1:
             col_a, col_b = st.columns(2)
@@ -428,10 +414,28 @@ if uploaded_file is not None:
             res_pp7 = collect_period_results(df_pp7d, 'PP7D', conversion_col)
             res_p30 = collect_period_results(df_p30d, 'P30D', conversion_col)
             
-            with t_p1: st.dataframe(res_p1[2][1], use_container_width=True)
-            with t_p7: st.dataframe(res_p7[2][1], use_container_width=True)
-            with t_pp7: st.dataframe(res_pp7[2][1], use_container_width=True)
-            with t_p30: st.dataframe(res_p30[2][1], use_container_width=True)
+            def render_data_tab(results_list, unique_key):
+                # results_list 結構: [0]Ad, [1]AdSet, [2]Campaign, [3]Detail
+                view_mode = st.radio(
+                    "選擇檢視層級:", 
+                    ["行銷活動 (Campaign)", "廣告組合 (AdSet)", "廣告 (Ad)", "詳細層級 (AdSet + Ad)"],
+                    horizontal=True,
+                    key=unique_key
+                )
+                
+                if view_mode == "行銷活動 (Campaign)":
+                    st.dataframe(results_list[2][1], use_container_width=True)
+                elif view_mode == "廣告組合 (AdSet)":
+                    st.dataframe(results_list[1][1], use_container_width=True)
+                elif view_mode == "廣告 (Ad)":
+                    st.dataframe(results_list[0][1], use_container_width=True)
+                else:
+                    st.dataframe(results_list[3][1], use_container_width=True)
+
+            with t_p1: render_data_tab(res_p1, "radio_p1")
+            with t_p7: render_data_tab(res_p7, "radio_p7")
+            with t_pp7: render_data_tab(res_pp7, "radio_pp7")
+            with t_p30: render_data_tab(res_p30, "radio_p30")
 
         # 下載區
         with st.sidebar:
