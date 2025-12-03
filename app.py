@@ -42,7 +42,7 @@ The user has uploaded a **Single-Sheet Excel File**.
 # ==========================================
 # 1. 基礎設定與字型處理
 # ==========================================
-st.set_page_config(page_title="廣告成效全能分析 v5.5 (詳細層級版)", layout="wide")
+st.set_page_config(page_title="廣告成效全能分析 v5.7 (Excel詳盡版)", layout="wide")
 
 @st.cache_resource
 def get_chinese_font():
@@ -89,6 +89,7 @@ def create_summary_row(df, metric_cols):
     return pd.DataFrame([summary_dict])
 
 def calculate_consolidated_metrics(df_group, conv_col):
+    # 這裡的 df_group 可能是多層級 index，reset_index 會將其轉為欄位
     df_metrics = df_group.agg({
         '花費金額 (TWD)': 'sum',
         conv_col: 'sum',
@@ -119,14 +120,22 @@ def calculate_consolidated_metrics(df_group, conv_col):
 def collect_period_results(df, period_name_short, conv_col):
     df['廣告名稱_clean'] = df['廣告名稱'].apply(clean_ad_name)
     results = []
-    # 0. 廣告層級 (聚合相同名稱的廣告)
+    
+    # === 關鍵修改：確保這個列表包含「詳細層級」 ===
+    # 0. 詳細層級 (行銷活動 > 廣告組合 > 廣告)
+    # 這份資料會被 UI 使用，也會被寫入 Excel
+    results.append((
+        f'{period_name_short}_Detail_詳細(組合+廣告)', 
+        calculate_consolidated_metrics(df.groupby(['行銷活動名稱', '廣告組合名稱', '廣告名稱']), conv_col)
+    ))
+    
+    # 1. 廣告層級
     results.append((f'{period_name_short}_Ad_廣告', calculate_consolidated_metrics(df.groupby('廣告名稱_clean'), conv_col)))
-    # 1. 廣告組合層級
+    # 2. 廣告組合層級
     results.append((f'{period_name_short}_AdSet_廣告組合', calculate_consolidated_metrics(df.groupby(['行銷活動名稱', '廣告組合名稱']), conv_col)))
-    # 2. 行銷活動層級
+    # 3. 行銷活動層級
     results.append((f'{period_name_short}_Campaign_行銷活動', calculate_consolidated_metrics(df.groupby('行銷活動名稱'), conv_col)))
-    # 3. [NEW] 詳細層級 (行銷活動 > 廣告組合 > 廣告)
-    results.append((f'{period_name_short}_Detail_詳細(組合+廣告)', calculate_consolidated_metrics(df.groupby(['行銷活動名稱', '廣告組合名稱', '廣告名稱']), conv_col)))
+    
     return results
 
 # ==========================================
@@ -259,7 +268,7 @@ def to_excel_single_sheet_stacked(dfs_list, prompt_text):
 # ==========================================
 # 4. 主程式 UI
 # ==========================================
-st.title("📊 廣告成效全能分析 v5.5 (詳細層級版)")
+st.title("📊 廣告成效全能分析 v5.7 (Excel詳盡版)")
 
 uploaded_file = st.file_uploader("請上傳 CSV 報表檔案", type=['csv'])
 
@@ -355,7 +364,7 @@ if uploaded_file is not None:
         alerts_weekly = check_weekly_trends(res_p7d_camp, res_pp7d_camp, '行銷活動名稱')
 
         # --- UI 呈現 ---
-        tab1, tab2 = st.tabs(["📈 戰情室 & 雙重監控", "📑 詳細數據表 (可切換層級)"])
+        tab1, tab2 = st.tabs(["📈 戰情室 & 雙重監控", "📑 詳細數據表 (AdSet+Ad)"])
         
         with tab1:
             col_a, col_b = st.columns(2)
@@ -405,7 +414,7 @@ if uploaded_file is not None:
             st.pyplot(fig)
 
         with tab2:
-            st.markdown("### 各區間詳細數據")
+            st.markdown("### 🔍 各區間詳細數據 (行銷活動 > 廣告組合 > 廣告)")
             t_p1, t_p7, t_pp7, t_p30 = st.tabs(["P1D (昨日)", "P7D (本週)", "PP7D (上週)", "P30D (月報)"])
             
             # 準備完整數據 (含 Ad/AdSet)
@@ -415,22 +424,25 @@ if uploaded_file is not None:
             res_p30 = collect_period_results(df_p30d, 'P30D', conversion_col)
             
             def render_data_tab(results_list, unique_key):
-                # results_list 結構: [0]Ad, [1]AdSet, [2]Campaign, [3]Detail
-                view_mode = st.radio(
-                    "選擇檢視層級:", 
-                    ["行銷活動 (Campaign)", "廣告組合 (AdSet)", "廣告 (Ad)", "詳細層級 (AdSet + Ad)"],
-                    horizontal=True,
-                    key=unique_key
-                )
+                # UI 優化：預設直接顯示最詳細的表格 (Detail)
+                # results_list 結構: [0]Detail, [1]Ad, [2]AdSet, [3]Campaign
                 
-                if view_mode == "行銷活動 (Campaign)":
-                    st.dataframe(results_list[2][1], use_container_width=True)
-                elif view_mode == "廣告組合 (AdSet)":
-                    st.dataframe(results_list[1][1], use_container_width=True)
-                elif view_mode == "廣告 (Ad)":
-                    st.dataframe(results_list[0][1], use_container_width=True)
-                else:
-                    st.dataframe(results_list[3][1], use_container_width=True)
+                st.info("💡 下表已展開為「詳細層級」，您可看到每個行銷活動 > 廣告組合 下的各別廣告表現。")
+                st.dataframe(results_list[0][1], use_container_width=True)
+                
+                with st.expander("查看其他匯總層級 (行銷活動 / 廣告組合 / 廣告整體)"):
+                    view_mode = st.radio(
+                        "選擇其他檢視層級:", 
+                        ["行銷活動 (Campaign)", "廣告組合 (AdSet)", "廣告 (Ad)"],
+                        horizontal=True,
+                        key=unique_key
+                    )
+                    if view_mode == "行銷活動 (Campaign)":
+                        st.dataframe(results_list[3][1], use_container_width=True)
+                    elif view_mode == "廣告組合 (AdSet)":
+                        st.dataframe(results_list[2][1], use_container_width=True)
+                    elif view_mode == "廣告 (Ad)":
+                        st.dataframe(results_list[1][1], use_container_width=True)
 
             with t_p1: render_data_tab(res_p1, "radio_p1")
             with t_p7: render_data_tab(res_p7, "radio_p7")
@@ -440,8 +452,12 @@ if uploaded_file is not None:
         # 下載區
         with st.sidebar:
             st.divider()
+            # 準備下載的資料堆疊
             excel_stack = []
             excel_stack.append(('Trend_Daily', get_trend_data_excel(df_p30d, conversion_col)))
+            
+            # 將各區間的所有報表 (含 Detail) 加入堆疊
+            # collect_period_results 回傳的列表中，索引 [0] 就是 Detail
             excel_stack.extend(res_p1)
             excel_stack.extend(res_p7)
             excel_stack.extend(res_pp7)
@@ -450,7 +466,7 @@ if uploaded_file is not None:
             excel_bytes = to_excel_single_sheet_stacked(excel_stack, AI_CONSULTANT_PROMPT)
             
             st.download_button(
-                label="📥 下載 AI 完整分析報表",
+                label="📥 下載 AI 完整分析報表 (含詳細層級)",
                 data=excel_bytes,
                 file_name=f"Full_Report_{max_date.strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
