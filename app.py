@@ -8,6 +8,8 @@ import urllib.request
 import re
 from datetime import datetime, timedelta
 import io
+import requests  # 新增：用於 REST API 兼容模式
+import json      # 新增：用於處理 API 回傳格式
 
 # --- 核心修正：安全引入套件以防止 App 閃退 ---
 try:
@@ -58,7 +60,7 @@ The user has provided summary data tables from an advertising account.
 # ==========================================
 # 1. 基礎設定與字型處理
 # ==========================================
-st.set_page_config(page_title="廣告成效全能分析 v6.0 (AI Agent版)", layout="wide")
+st.set_page_config(page_title="廣告成效全能分析 v6.1 (兼容版)", layout="wide")
 
 @st.cache_resource
 def get_chinese_font():
@@ -303,50 +305,70 @@ def to_excel_single_sheet_stacked(dfs_list, prompt_text, ai_response=None):
     return output.getvalue()
 
 # ==========================================
-# 4. 新增功能：Gemini AI 分析串接
+# 4. 新增功能：Gemini AI 分析串接 (雙模式：SDK / REST API)
 # ==========================================
 def call_gemini_analysis(api_key, alerts_daily, alerts_weekly, campaign_summary):
-    # 檢查套件是否安裝
-    if not HAS_GENAI:
-        return "⚠️ 系統錯誤：偵測到環境未安裝 `google-generativeai` 套件。\n請聯絡管理員或在終端機執行：`pip install google-generativeai` 以啟用此功能。"
+    # 準備 Prompt (兩種模式共用)
+    data_context = "\n\n# 📊 Account Data Summary\n"
+    data_context += "## 1. Daily Alerts (P1D vs P7D Anomalies)\n"
+    if not alerts_daily.empty:
+        data_context += alerts_daily.to_markdown(index=False)
+    else:
+        data_context += "No critical daily anomalies detected."
+        
+    data_context += "\n\n## 2. Weekly Trends (P7D vs PP7D Decline)\n"
+    if not alerts_weekly.empty:
+        data_context += alerts_weekly.to_markdown(index=False)
+    else:
+        data_context += "No significant weekly decline trends detected."
+        
+    data_context += "\n\n## 3. Current Week Campaign Performance (P7D)\n"
+    data_context += campaign_summary.head(10).to_markdown(index=False)
+    
+    full_prompt = AI_CONSULTANT_PROMPT + data_context + "\n\n# User Request: 請根據上述數據，產生一份廣告優化診斷報告。"
 
-    try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-pro')
-        
-        data_context = "\n\n# 📊 Account Data Summary\n"
-        data_context += "## 1. Daily Alerts (P1D vs P7D Anomalies)\n"
-        if not alerts_daily.empty:
-            data_context += alerts_daily.to_markdown(index=False)
-        else:
-            data_context += "No critical daily anomalies detected."
+    with st.spinner('🤖 AI 正在分析數據中... (這可能需要 10-20 秒)'):
+        try:
+            # 模式 A: 使用官方 SDK (如果已安裝)
+            if HAS_GENAI:
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel('gemini-1.5-pro')
+                response = model.generate_content(full_prompt)
+                return response.text
             
-        data_context += "\n\n## 2. Weekly Trends (P7D vs PP7D Decline)\n"
-        if not alerts_weekly.empty:
-            data_context += alerts_weekly.to_markdown(index=False)
-        else:
-            data_context += "No significant weekly decline trends detected."
-            
-        data_context += "\n\n## 3. Current Week Campaign Performance (P7D)\n"
-        data_context += campaign_summary.head(10).to_markdown(index=False)
-        
-        full_prompt = AI_CONSULTANT_PROMPT + data_context + "\n\n# User Request: 請根據上述數據，產生一份廣告優化診斷報告。"
-        
-        with st.spinner('🤖 AI 正在分析數據中... (這可能需要 10-20 秒)'):
-            response = model.generate_content(full_prompt)
-            return response.text
-            
-    except Exception as e:
-        return f"AI 分析發生錯誤: {str(e)}\n請檢查 API Key 是否正確或額度是否足夠。"
+            # 模式 B: 使用 REST API (Fallback 模式)
+            else:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={api_key}"
+                headers = {'Content-Type': 'application/json'}
+                data = {
+                    "contents": [{
+                        "parts": [{"text": full_prompt}]
+                    }]
+                }
+                
+                response = requests.post(url, headers=headers, json=data)
+                
+                if response.status_code == 200:
+                    result_json = response.json()
+                    # 安全地解析 JSON 回傳結構
+                    try:
+                        return result_json['candidates'][0]['content']['parts'][0]['text']
+                    except (KeyError, IndexError):
+                        return f"⚠️ API 回傳格式不如預期: {str(result_json)}"
+                else:
+                    return f"⚠️ API 連線錯誤 ({response.status_code}): {response.text}"
+                
+        except Exception as e:
+            return f"❌ 系統發生錯誤: {str(e)}\n請檢查 API Key 是否正確。"
 
 # ==========================================
 # 5. 主程式 UI
 # ==========================================
-st.title("📊 廣告成效全能分析 v6.0 (AI Agent版)")
+st.title("📊 廣告成效全能分析 v6.1 (兼容版)")
 
 # 顯示環境警告 (如果缺少關鍵套件)
 if not HAS_GENAI:
-    st.warning("⚠️ 警告：未偵測到 `google-generativeai` 套件。AI 分析功能將無法使用。")
+    st.warning("ℹ️ 提示：未偵測到 `google-generativeai` 套件。系統將自動切換為 **REST API 兼容模式** (只需 API Key 即可運作)。")
 if not HAS_XLSXWRITER:
     st.warning("⚠️ 警告：未偵測到 `xlsxwriter` 套件。Excel 匯出功能可能會失效。")
 
@@ -537,13 +559,10 @@ if uploaded_file is not None:
             
             col_ai_btn, col_ai_warn = st.columns([1, 2])
             with col_ai_btn:
-                # 若未安裝套件，按鈕反灰或顯示錯誤
-                if not HAS_GENAI:
-                    st.error("🚫 缺少 AI 套件，功能已停用")
-                else:
-                    run_ai = st.button("🚀 開始 AI 智能分析", type="primary")
+                # 即使沒安裝套件，現在也允許按下按鈕（會使用 REST API Fallback）
+                run_ai = st.button("🚀 開始 AI 智能分析", type="primary")
             
-            if HAS_GENAI and 'run_ai' in locals() and run_ai:
+            if run_ai:
                 if not gemini_api_key:
                     st.warning("⚠️ 請先於左側側邊欄輸入 Gemini API Key")
                 else:
