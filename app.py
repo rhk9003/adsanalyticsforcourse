@@ -8,6 +8,7 @@ import urllib.request
 import re
 from datetime import datetime, timedelta
 import io
+import google.generativeai as genai  # 引入 Google AI SDK
 
 # ==========================================
 # 0. 全域設定：AI 顧問指令
@@ -15,14 +16,14 @@ import io
 AI_CONSULTANT_PROMPT = """
 # ⚠️ SYSTEM OVERRIDE: DATA LOADING INSTRUCTION
 **To the AI Analysis Model:**
-The user has uploaded a **Single-Sheet Excel File**.
-1. **ALL DATA** is contained in the **First Sheet**.
+The user has provided summary data tables from an advertising account.
+1. **Data Source**: Summarized metrics from P1D (Yesterday), P7D (Last 7 Days), and comparison vs PP7D (Previous Period).
 2. **Key Comparisons**: 
    - **P1D vs P7D**: Immediate daily alerts.
    - **P7D vs PP7D**: Week-over-Week trend analysis.
 
 # Role
-你是一位資深成效廣告分析師。
+你是一位資深成效廣告分析師。請使用繁體中文回答。
 
 # Analysis Requirements
 ## 1. 🚨 P1D 緊急異常 (Daily Alert)
@@ -37,12 +38,13 @@ The user has uploaded a **Single-Sheet Excel File**.
 
 ## 3. 綜合優化建議
 - 針對衰退項目提出具體假設（素材疲乏？競價激烈？受眾飽和？）。
+- 請條列式給出具體的調整建議（例如：暫停廣告、更換受眾、優化落地頁）。
 """
 
 # ==========================================
 # 1. 基礎設定與字型處理
 # ==========================================
-st.set_page_config(page_title="廣告成效全能分析 v5.7 (Excel詳盡版)", layout="wide")
+st.set_page_config(page_title="廣告成效全能分析 v6.0 (AI Agent版)", layout="wide")
 
 @st.cache_resource
 def get_chinese_font():
@@ -89,7 +91,6 @@ def create_summary_row(df, metric_cols):
     return pd.DataFrame([summary_dict])
 
 def calculate_consolidated_metrics(df_group, conv_col):
-    # 這裡的 df_group 可能是多層級 index，reset_index 會將其轉為欄位
     df_metrics = df_group.agg({
         '花費金額 (TWD)': 'sum',
         conv_col: 'sum',
@@ -121,14 +122,11 @@ def collect_period_results(df, period_name_short, conv_col):
     df['廣告名稱_clean'] = df['廣告名稱'].apply(clean_ad_name)
     results = []
     
-    # === 關鍵修改：確保這個列表包含「詳細層級」 ===
-    # 0. 詳細層級 (行銷活動 > 廣告組合 > 廣告)
-    # 這份資料會被 UI 使用，也會被寫入 Excel
+    # 0. 詳細層級
     results.append((
         f'{period_name_short}_Detail_詳細(組合+廣告)', 
         calculate_consolidated_metrics(df.groupby(['行銷活動名稱', '廣告組合名稱', '廣告名稱']), conv_col)
     ))
-    
     # 1. 廣告層級
     results.append((f'{period_name_short}_Ad_廣告', calculate_consolidated_metrics(df.groupby('廣告名稱_clean'), conv_col)))
     # 2. 廣告組合層級
@@ -141,7 +139,6 @@ def collect_period_results(df, period_name_short, conv_col):
 # ==========================================
 # 3. 異常偵測與趨勢分析邏輯
 # ==========================================
-
 def check_daily_anomalies(df_p1, df_p7, level_name='行銷活動名稱'):
     p1 = df_p1[df_p1[level_name] != '全帳戶平均'].copy()
     p7 = df_p7[df_p7[level_name] != '全帳戶平均'].copy()
@@ -232,7 +229,8 @@ def get_trend_data_excel(df_p30d, conv_col):
     final_trend['天數'] = final_trend['天數'].dt.strftime('%Y-%m-%d')
     return final_trend.round(2)
 
-def to_excel_single_sheet_stacked(dfs_list, prompt_text):
+# 修改：Excel 匯出函數增加 ai_response 參數
+def to_excel_single_sheet_stacked(dfs_list, prompt_text, ai_response=None):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
@@ -240,17 +238,30 @@ def to_excel_single_sheet_stacked(dfs_list, prompt_text):
         ws = workbook.add_worksheet(sheet_name)
         writer.sheets[sheet_name] = ws
         
-        fmt_prompt = workbook.add_format({'text_wrap': True, 'valign': 'top', 'font_size': 11, 'bg_color': '#F0F2F6'})
+        fmt_prompt = workbook.add_format({'text_wrap': True, 'valign': 'top', 'font_size': 10, 'bg_color': '#F0F2F6'})
+        fmt_ai_response = workbook.add_format({'text_wrap': True, 'valign': 'top', 'font_size': 11, 'bg_color': '#FFF8DC', 'border': 1})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 14, 'font_color': '#0068C9'})
         fmt_table_header = workbook.add_format({'bold': True, 'bg_color': '#E6E6E6', 'border': 1})
         
         current_row = 0
-        ws.merge_range('A1:H1', "🤖 AI 分析顧問指令 (SYSTEM PROMPT)", fmt_header)
+        
+        # 1. 寫入 AI 分析結果 (如果有的話)
+        if ai_response:
+            ws.merge_range('A1:K1', "🤖 Gemini AI 廣告診斷報告 (AI Analysis Report)", fmt_header)
+            current_row += 1
+            # 估算行數 (粗略估計每行 50 字)
+            ai_lines = ai_response.count('\n') + (len(ai_response) // 50) + 2
+            ws.merge_range(current_row, 0, current_row + ai_lines, 10, ai_response, fmt_ai_response)
+            current_row += ai_lines + 2
+        
+        # 2. 寫入 System Prompt (留底用)
+        ws.merge_range(current_row, 0, current_row, 8, "🛠️ 系統分析指令 (System Prompt Log)", fmt_header)
         current_row += 1
-        prompt_lines = prompt_text.count('\n') + 5
+        prompt_lines = prompt_text.count('\n') + 3
         ws.merge_range(current_row, 0, current_row + prompt_lines, 10, prompt_text, fmt_prompt)
         current_row += prompt_lines + 2
         
+        # 3. 寫入所有數據表
         for title, df in dfs_list:
             ws.write(current_row, 0, f"📌 Table: {title}", fmt_header)
             current_row += 1
@@ -266,9 +277,46 @@ def to_excel_single_sheet_stacked(dfs_list, prompt_text):
     return output.getvalue()
 
 # ==========================================
-# 4. 主程式 UI
+# 4. 新增功能：Gemini AI 分析串接
 # ==========================================
-st.title("📊 廣告成效全能分析 v5.7 (Excel詳盡版)")
+def call_gemini_analysis(api_key, alerts_daily, alerts_weekly, campaign_summary):
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        
+        data_context = "\n\n# 📊 Account Data Summary\n"
+        data_context += "## 1. Daily Alerts (P1D vs P7D Anomalies)\n"
+        if not alerts_daily.empty:
+            data_context += alerts_daily.to_markdown(index=False)
+        else:
+            data_context += "No critical daily anomalies detected."
+            
+        data_context += "\n\n## 2. Weekly Trends (P7D vs PP7D Decline)\n"
+        if not alerts_weekly.empty:
+            data_context += alerts_weekly.to_markdown(index=False)
+        else:
+            data_context += "No significant weekly decline trends detected."
+            
+        data_context += "\n\n## 3. Current Week Campaign Performance (P7D)\n"
+        data_context += campaign_summary.head(10).to_markdown(index=False)
+        
+        full_prompt = AI_CONSULTANT_PROMPT + data_context + "\n\n# User Request: 請根據上述數據，產生一份廣告優化診斷報告。"
+        
+        with st.spinner('🤖 AI 正在分析數據中... (這可能需要 10-20 秒)'):
+            response = model.generate_content(full_prompt)
+            return response.text
+            
+    except Exception as e:
+        return f"AI 分析發生錯誤: {str(e)}\n請檢查 API Key 是否正確或額度是否足夠。"
+
+# ==========================================
+# 5. 主程式 UI
+# ==========================================
+st.title("📊 廣告成效全能分析 v6.0 (AI Agent版)")
+
+# 初始化 Session State
+if 'gemini_result' not in st.session_state:
+    st.session_state['gemini_result'] = None
 
 uploaded_file = st.file_uploader("請上傳 CSV 報表檔案", type=['csv'])
 
@@ -289,6 +337,12 @@ if uploaded_file is not None:
         
         with st.sidebar:
             st.header("⚙️ 分析設定")
+            
+            st.subheader("🤖 AI 分析設定")
+            gemini_api_key = st.text_input("Gemini API Key", type="password", placeholder="輸入 Key 以啟用 AI 分析")
+            st.caption("[取得 Google AI Studio Key](https://aistudio.google.com/app/apikey)")
+            st.divider()
+            
             suggested_idx = 0
             for idx, col in enumerate(all_columns):
                 c_low = col.lower()
@@ -338,11 +392,10 @@ if uploaded_file is not None:
         max_date = df_std['天數'].max().normalize()
         today = max_date + timedelta(days=1)
         
-        # P1D
+        # P1D / P7D / PP7D / P30D
         p1d_start = max_date
         df_p1d = df_std[df_std['天數'] == p1d_start].copy()
         
-        # P7D & PP7D
         p7d_start = today - timedelta(days=7)
         p7d_end = today - timedelta(days=1)
         pp7d_start = p7d_start - timedelta(days=7)
@@ -354,21 +407,18 @@ if uploaded_file is not None:
         df_pp7d = df_std[(df_std['天數'] >= pp7d_start) & (df_std['天數'] <= pp7d_end)].copy()
         df_p30d = df_std[(df_std['天數'] >= p30d_start) & (df_std['天數'] <= p30d_end)].copy()
         
-        # 計算各區間數據
         res_p1d_camp = calculate_consolidated_metrics(df_p1d.groupby('行銷活動名稱'), conversion_col)
         res_p7d_camp = calculate_consolidated_metrics(df_p7d.groupby('行銷活動名稱'), conversion_col)
         res_pp7d_camp = calculate_consolidated_metrics(df_pp7d.groupby('行銷活動名稱'), conversion_col)
         
-        # === 核心：產生警示表 ===
         alerts_daily = check_daily_anomalies(res_p1d_camp, res_p7d_camp, '行銷活動名稱')
         alerts_weekly = check_weekly_trends(res_p7d_camp, res_pp7d_camp, '行銷活動名稱')
 
         # --- UI 呈現 ---
-        tab1, tab2 = st.tabs(["📈 戰情室 & 雙重監控", "📑 詳細數據表 (AdSet+Ad)"])
+        tab1, tab2, tab3 = st.tabs(["📈 戰情室 & 雙重監控", "📑 詳細數據表 (AdSet+Ad)", "🤖 AI 深度診斷 (Gemini)"])
         
         with tab1:
             col_a, col_b = st.columns(2)
-            
             with col_a:
                 st.subheader("🚨 P1D 緊急警示 (昨日 vs 均值)")
                 if not alerts_daily.empty:
@@ -384,7 +434,6 @@ if uploaded_file is not None:
                     st.info("本週無顯著衰退項目 (CPA與CTR皆穩定)")
 
             st.divider()
-
             # 30日概況
             total_spend = df_p30d['花費金額 (TWD)'].sum()
             total_conv = df_p30d[conversion_col].sum()
@@ -401,32 +450,25 @@ if uploaded_file is not None:
             
             fig, ax1 = plt.subplots(figsize=(12, 5))
             ax2 = ax1.twinx()
-            
             ax1.bar(daily['日期str'], daily['花費金額 (TWD)'], color='#ddd', label='花費', alpha=0.6)
             ax2.plot(daily['日期str'], daily[conversion_col], color='red', marker='o', label='轉換數', linewidth=2)
-            
             ax1.set_xlabel('日期', fontproperties=font_prop)
             ax1.set_ylabel('花費 (TWD)', fontproperties=font_prop)
             ax2.set_ylabel('轉換數', fontproperties=font_prop)
             if font_prop:
                 for label in ax1.get_xticklabels(): label.set_fontproperties(font_prop)
-            
             st.pyplot(fig)
 
         with tab2:
             st.markdown("### 🔍 各區間詳細數據 (行銷活動 > 廣告組合 > 廣告)")
             t_p1, t_p7, t_pp7, t_p30 = st.tabs(["P1D (昨日)", "P7D (本週)", "PP7D (上週)", "P30D (月報)"])
             
-            # 準備完整數據 (含 Ad/AdSet)
             res_p1 = collect_period_results(df_p1d, 'P1D', conversion_col)
             res_p7 = collect_period_results(df_p7d, 'P7D', conversion_col)
             res_pp7 = collect_period_results(df_pp7d, 'PP7D', conversion_col)
             res_p30 = collect_period_results(df_p30d, 'P30D', conversion_col)
             
             def render_data_tab(results_list, unique_key):
-                # UI 優化：預設直接顯示最詳細的表格 (Detail)
-                # results_list 結構: [0]Detail, [1]Ad, [2]AdSet, [3]Campaign
-                
                 st.info("💡 下表已展開為「詳細層級」，您可看到每個行銷活動 > 廣告組合 下的各別廣告表現。")
                 st.dataframe(results_list[0][1], use_container_width=True)
                 
@@ -449,24 +491,59 @@ if uploaded_file is not None:
             with t_pp7: render_data_tab(res_pp7, "radio_pp7")
             with t_p30: render_data_tab(res_p30, "radio_p30")
 
-        # 下載區
+        # === Tab 3: AI 分析區塊 ===
+        with tab3:
+            st.header("🤖 Gemini AI 廣告成效診斷")
+            st.markdown("""
+            AI 將根據 **每日警示 (Daily Alerts)**、**週趨勢 (Weekly Trends)** 與 **本週行銷活動 (P7D Campaign)** 數據，
+            自動依照左側設定的「AI 顧問指令」進行診斷並提供優化建議。
+            """)
+            
+            col_ai_btn, col_ai_warn = st.columns([1, 2])
+            with col_ai_btn:
+                run_ai = st.button("🚀 開始 AI 智能分析", type="primary")
+            
+            if run_ai:
+                if not gemini_api_key:
+                    st.warning("⚠️ 請先於左側側邊欄輸入 Gemini API Key")
+                else:
+                    analysis_result = call_gemini_analysis(
+                        gemini_api_key, 
+                        alerts_daily, 
+                        alerts_weekly, 
+                        res_p7d_camp
+                    )
+                    # 關鍵：將結果存入 Session State，確保切換 Tab 或點擊下載時內容不消失
+                    st.session_state['gemini_result'] = analysis_result
+            
+            # 顯示分析結果 (如果存在)
+            if st.session_state['gemini_result']:
+                 st.markdown("### 📝 AI 診斷報告")
+                 st.markdown("---")
+                 st.markdown(st.session_state['gemini_result'])
+
+        # 下載區 (維持並增強功能)
         with st.sidebar:
             st.divider()
-            # 準備下載的資料堆疊
             excel_stack = []
             excel_stack.append(('Trend_Daily', get_trend_data_excel(df_p30d, conversion_col)))
-            
-            # 將各區間的所有報表 (含 Detail) 加入堆疊
-            # collect_period_results 回傳的列表中，索引 [0] 就是 Detail
             excel_stack.extend(res_p1)
             excel_stack.extend(res_p7)
             excel_stack.extend(res_pp7)
             excel_stack.extend(res_p30)
             
-            excel_bytes = to_excel_single_sheet_stacked(excel_stack, AI_CONSULTANT_PROMPT)
+            # 從 Session State 獲取最新的 AI 分析結果 (如果有的話)
+            current_ai_result = st.session_state.get('gemini_result', None)
+            
+            # 傳入 AI 結果到 Excel 生成函數
+            excel_bytes = to_excel_single_sheet_stacked(excel_stack, AI_CONSULTANT_PROMPT, current_ai_result)
+            
+            button_label = "📥 下載完整分析報表"
+            if current_ai_result:
+                button_label += " (已包含 AI 診斷)"
             
             st.download_button(
-                label="📥 下載 AI 完整分析報表 (含詳細層級)",
+                label=button_label,
                 data=excel_bytes,
                 file_name=f"Full_Report_{max_date.strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
