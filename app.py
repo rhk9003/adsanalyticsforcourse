@@ -307,23 +307,43 @@ def to_excel_single_sheet_stacked(dfs_list, prompt_text, ai_response=None):
 # ==========================================
 # 4. 新增功能：Gemini AI 分析串接 (雙模式：SDK / REST API)
 # ==========================================
+
+# 新增輔助函數：安全地將 DataFrame 轉換為文字格式，避免缺少 tabulate 報錯
+def safe_to_markdown(df):
+    """
+    嘗試使用 markdown 格式，如果缺少 tabulate 套件，則回退到 Pipe 分隔的 CSV 格式。
+    LLM 都能理解這兩種格式。
+    """
+    try:
+        return df.to_markdown(index=False)
+    except ImportError:
+        # 如果沒有 tabulate，手動轉為類似 Markdown 的格式 (Pipe 分隔)
+        # 這裡使用 to_csv 並用 '|' 分隔，效果跟 Markdown 很像
+        return df.to_csv(sep='|', index=False)
+    except Exception:
+        # 最後的防線：直接轉字串
+        return df.to_string(index=False)
+
 def call_gemini_analysis(api_key, alerts_daily, alerts_weekly, campaign_summary):
     # 準備 Prompt (兩種模式共用)
     data_context = "\n\n# 📊 Account Data Summary\n"
     data_context += "## 1. Daily Alerts (P1D vs P7D Anomalies)\n"
     if not alerts_daily.empty:
-        data_context += alerts_daily.to_markdown(index=False)
+        # 使用安全的轉換函數
+        data_context += safe_to_markdown(alerts_daily)
     else:
         data_context += "No critical daily anomalies detected."
         
     data_context += "\n\n## 2. Weekly Trends (P7D vs PP7D Decline)\n"
     if not alerts_weekly.empty:
-        data_context += alerts_weekly.to_markdown(index=False)
+        # 使用安全的轉換函數
+        data_context += safe_to_markdown(alerts_weekly)
     else:
         data_context += "No significant weekly decline trends detected."
         
     data_context += "\n\n## 3. Current Week Campaign Performance (P7D)\n"
-    data_context += campaign_summary.head(10).to_markdown(index=False)
+    # 使用安全的轉換函數
+    data_context += safe_to_markdown(campaign_summary.head(10))
     
     full_prompt = AI_CONSULTANT_PROMPT + data_context + "\n\n# User Request: 請根據上述數據，產生一份廣告優化診斷報告。"
 
