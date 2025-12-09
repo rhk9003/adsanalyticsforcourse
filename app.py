@@ -8,7 +8,21 @@ import urllib.request
 import re
 from datetime import datetime, timedelta
 import io
-import google.generativeai as genai  # 引入 Google AI SDK
+
+# --- 核心修正：安全引入套件以防止 App 閃退 ---
+try:
+    import google.generativeai as genai
+    HAS_GENAI = True
+except ModuleNotFoundError:
+    HAS_GENAI = False
+
+# 檢查 xlsxwriter 是否存在 (Excel 匯出需要)
+try:
+    import xlsxwriter
+    HAS_XLSXWRITER = True
+except ModuleNotFoundError:
+    HAS_XLSXWRITER = False
+# -------------------------------------------
 
 # ==========================================
 # 0. 全域設定：AI 顧問指令
@@ -231,47 +245,59 @@ def get_trend_data_excel(df_p30d, conv_col):
 
 # 修改：Excel 匯出函數增加 ai_response 參數
 def to_excel_single_sheet_stacked(dfs_list, prompt_text, ai_response=None):
+    # 檢查 xlsxwriter 引擎是否可用
+    engine = 'xlsxwriter' if HAS_XLSXWRITER else None
+    if not engine:
+        # 如果沒有 xlsxwriter，回退到預設或拋出警告
+        # 這裡為了簡單，我們假設使用者會安裝。如果真的沒有，pandas 可能會報錯或使用 openpyxl
+        pass
+
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        workbook = writer.book
-        sheet_name = '📘_完整分析報告'
-        ws = workbook.add_worksheet(sheet_name)
-        writer.sheets[sheet_name] = ws
-        
-        fmt_prompt = workbook.add_format({'text_wrap': True, 'valign': 'top', 'font_size': 10, 'bg_color': '#F0F2F6'})
-        fmt_ai_response = workbook.add_format({'text_wrap': True, 'valign': 'top', 'font_size': 11, 'bg_color': '#FFF8DC', 'border': 1})
-        fmt_header = workbook.add_format({'bold': True, 'font_size': 14, 'font_color': '#0068C9'})
-        fmt_table_header = workbook.add_format({'bold': True, 'bg_color': '#E6E6E6', 'border': 1})
-        
-        current_row = 0
-        
-        # 1. 寫入 AI 分析結果 (如果有的話)
-        if ai_response:
-            ws.merge_range('A1:K1', "🤖 Gemini AI 廣告診斷報告 (AI Analysis Report)", fmt_header)
-            current_row += 1
-            # 估算行數 (粗略估計每行 50 字)
-            ai_lines = ai_response.count('\n') + (len(ai_response) // 50) + 2
-            ws.merge_range(current_row, 0, current_row + ai_lines, 10, ai_response, fmt_ai_response)
-            current_row += ai_lines + 2
-        
-        # 2. 寫入 System Prompt (留底用)
-        ws.merge_range(current_row, 0, current_row, 8, "🛠️ 系統分析指令 (System Prompt Log)", fmt_header)
-        current_row += 1
-        prompt_lines = prompt_text.count('\n') + 3
-        ws.merge_range(current_row, 0, current_row + prompt_lines, 10, prompt_text, fmt_prompt)
-        current_row += prompt_lines + 2
-        
-        # 3. 寫入所有數據表
-        for title, df in dfs_list:
-            ws.write(current_row, 0, f"📌 Table: {title}", fmt_header)
-            current_row += 1
-            df.to_excel(writer, sheet_name=sheet_name, startrow=current_row, index=False)
-            for col_num, value in enumerate(df.columns.values):
-                ws.write(current_row, col_num, value, fmt_table_header)
-            current_row += len(df) + 4
+    # 使用 engine 參數
+    try:
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            workbook = writer.book
+            sheet_name = '📘_完整分析報告'
+            ws = workbook.add_worksheet(sheet_name)
+            writer.sheets[sheet_name] = ws
             
-        ws.set_column('A:A', 40)
-        ws.set_column('B:Z', 15)
+            fmt_prompt = workbook.add_format({'text_wrap': True, 'valign': 'top', 'font_size': 10, 'bg_color': '#F0F2F6'})
+            fmt_ai_response = workbook.add_format({'text_wrap': True, 'valign': 'top', 'font_size': 11, 'bg_color': '#FFF8DC', 'border': 1})
+            fmt_header = workbook.add_format({'bold': True, 'font_size': 14, 'font_color': '#0068C9'})
+            fmt_table_header = workbook.add_format({'bold': True, 'bg_color': '#E6E6E6', 'border': 1})
+            
+            current_row = 0
+            
+            # 1. 寫入 AI 分析結果 (如果有的話)
+            if ai_response:
+                ws.merge_range('A1:K1', "🤖 Gemini AI 廣告診斷報告 (AI Analysis Report)", fmt_header)
+                current_row += 1
+                # 估算行數 (粗略估計每行 50 字)
+                ai_lines = ai_response.count('\n') + (len(ai_response) // 50) + 2
+                ws.merge_range(current_row, 0, current_row + ai_lines, 10, ai_response, fmt_ai_response)
+                current_row += ai_lines + 2
+            
+            # 2. 寫入 System Prompt (留底用)
+            ws.merge_range(current_row, 0, current_row, 8, "🛠️ 系統分析指令 (System Prompt Log)", fmt_header)
+            current_row += 1
+            prompt_lines = prompt_text.count('\n') + 3
+            ws.merge_range(current_row, 0, current_row + prompt_lines, 10, prompt_text, fmt_prompt)
+            current_row += prompt_lines + 2
+            
+            # 3. 寫入所有數據表
+            for title, df in dfs_list:
+                ws.write(current_row, 0, f"📌 Table: {title}", fmt_header)
+                current_row += 1
+                df.to_excel(writer, sheet_name=sheet_name, startrow=current_row, index=False)
+                for col_num, value in enumerate(df.columns.values):
+                    ws.write(current_row, col_num, value, fmt_table_header)
+                current_row += len(df) + 4
+                
+            ws.set_column('A:A', 40)
+            ws.set_column('B:Z', 15)
+    except Exception as e:
+        # 如果 Excel 寫入失敗 (例如缺少 xlsxwriter)，回傳空 byte 或錯誤提示
+        return None
             
     output.seek(0)
     return output.getvalue()
@@ -280,6 +306,10 @@ def to_excel_single_sheet_stacked(dfs_list, prompt_text, ai_response=None):
 # 4. 新增功能：Gemini AI 分析串接
 # ==========================================
 def call_gemini_analysis(api_key, alerts_daily, alerts_weekly, campaign_summary):
+    # 檢查套件是否安裝
+    if not HAS_GENAI:
+        return "⚠️ 系統錯誤：偵測到環境未安裝 `google-generativeai` 套件。\n請聯絡管理員或在終端機執行：`pip install google-generativeai` 以啟用此功能。"
+
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-pro')
@@ -313,6 +343,12 @@ def call_gemini_analysis(api_key, alerts_daily, alerts_weekly, campaign_summary)
 # 5. 主程式 UI
 # ==========================================
 st.title("📊 廣告成效全能分析 v6.0 (AI Agent版)")
+
+# 顯示環境警告 (如果缺少關鍵套件)
+if not HAS_GENAI:
+    st.warning("⚠️ 警告：未偵測到 `google-generativeai` 套件。AI 分析功能將無法使用。")
+if not HAS_XLSXWRITER:
+    st.warning("⚠️ 警告：未偵測到 `xlsxwriter` 套件。Excel 匯出功能可能會失效。")
 
 # 初始化 Session State
 if 'gemini_result' not in st.session_state:
@@ -501,9 +537,13 @@ if uploaded_file is not None:
             
             col_ai_btn, col_ai_warn = st.columns([1, 2])
             with col_ai_btn:
-                run_ai = st.button("🚀 開始 AI 智能分析", type="primary")
+                # 若未安裝套件，按鈕反灰或顯示錯誤
+                if not HAS_GENAI:
+                    st.error("🚫 缺少 AI 套件，功能已停用")
+                else:
+                    run_ai = st.button("🚀 開始 AI 智能分析", type="primary")
             
-            if run_ai:
+            if HAS_GENAI and 'run_ai' in locals() and run_ai:
                 if not gemini_api_key:
                     st.warning("⚠️ 請先於左側側邊欄輸入 Gemini API Key")
                 else:
@@ -538,16 +578,19 @@ if uploaded_file is not None:
             # 傳入 AI 結果到 Excel 生成函數
             excel_bytes = to_excel_single_sheet_stacked(excel_stack, AI_CONSULTANT_PROMPT, current_ai_result)
             
-            button_label = "📥 下載完整分析報表"
-            if current_ai_result:
-                button_label += " (已包含 AI 診斷)"
-            
-            st.download_button(
-                label=button_label,
-                data=excel_bytes,
-                file_name=f"Full_Report_{max_date.strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            if excel_bytes:
+                button_label = "📥 下載完整分析報表"
+                if current_ai_result:
+                    button_label += " (已包含 AI 診斷)"
+                
+                st.download_button(
+                    label=button_label,
+                    data=excel_bytes,
+                    file_name=f"Full_Report_{max_date.strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                st.error("Excel 產生失敗，請檢查 xlsxwriter 套件是否安裝。")
 
     except Exception as e:
         st.error(f"系統發生未預期的錯誤: {e}")
