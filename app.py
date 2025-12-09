@@ -60,7 +60,7 @@ The user has provided summary data tables from an advertising account.
 # ==========================================
 # 1. 基礎設定與字型處理
 # ==========================================
-st.set_page_config(page_title="廣告成效全能分析 v6.1 (兼容版)", layout="wide")
+st.set_page_config(page_title="廣告成效全能分析 v6.2 (Gemini 2.5 Pro)", layout="wide")
 
 @st.cache_resource
 def get_chinese_font():
@@ -352,13 +352,15 @@ def call_gemini_analysis(api_key, alerts_daily, alerts_weekly, campaign_summary)
             # 模式 A: 使用官方 SDK (如果已安裝)
             if HAS_GENAI:
                 genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-1.5-pro')
+                # 修改點：更換模型為 gemini-2.5-pro
+                model = genai.GenerativeModel('gemini-2.5-pro')
                 response = model.generate_content(full_prompt)
                 return response.text
             
             # 模式 B: 使用 REST API (Fallback 模式)
             else:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={api_key}"
+                # 修改點：更換模型為 gemini-2.5-pro
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={api_key}"
                 headers = {'Content-Type': 'application/json'}
                 data = {
                     "contents": [{
@@ -379,12 +381,12 @@ def call_gemini_analysis(api_key, alerts_daily, alerts_weekly, campaign_summary)
                     return f"⚠️ API 連線錯誤 ({response.status_code}): {response.text}"
                 
         except Exception as e:
-            return f"❌ 系統發生錯誤: {str(e)}\n請檢查 API Key 是否正確。"
+            return f"❌ 系統發生錯誤: {str(e)}\n請檢查 API Key 是否正確，或該 Key 是否有權限存取 2.5 Pro 模型。"
 
 # ==========================================
 # 5. 主程式 UI
 # ==========================================
-st.title("📊 廣告成效全能分析 v6.1 (兼容版)")
+st.title("📊 廣告成效全能分析 v6.2 (Gemini 2.5 Pro)")
 
 # 顯示環境警告 (如果缺少關鍵套件)
 if not HAS_GENAI:
