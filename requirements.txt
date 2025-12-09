@@ -1,8 +1,8 @@
 streamlit
 pandas
 numpy
-xlsxwriter
-streamlit
-pandas
 matplotlib
+xlsxwriter
 requests
+google-generativeai
+tabulate
