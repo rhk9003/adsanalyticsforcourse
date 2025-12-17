@@ -1074,21 +1074,27 @@ AI 將依照「帳戶層級 → 行銷活動 → AdSet → 廣告 → 30 日趨�
             def editable_checklist(title, items, key_prefix):
                 st.markdown(f"### {title}")
                 chosen = []
-                for i, it in enumerate(items or []):
+
+                items = items or []
+                for i, it in enumerate(items):
                     k_chk = f"{key_prefix}_chk_{i}"
                     k_txt = f"{key_prefix}_txt_{i}"
 
+                    # 只在 widget 建立前初始化預設值（一次）
                     if k_chk not in st.session_state:
                         st.session_state[k_chk] = True
                     if k_txt not in st.session_state:
                         st.session_state[k_txt] = str(it)
 
-                    st.session_state[k_chk] = st.checkbox("採用", value=st.session_state[k_chk], key=k_chk)
-                    st.session_state[k_txt] = st.text_input("內容", value=st.session_state[k_txt], key=k_txt)
+                    # 由 widget 自行更新 session_state，避免重複賦值造成錯誤
+                    st.checkbox("採用", key=k_chk)
+                    st.text_input("內容", key=k_txt)
 
-                    if st.session_state[k_chk] and st.session_state[k_txt].strip():
-                        chosen.append(st.session_state[k_txt].strip())
+                    if st.session_state.get(k_chk) and str(st.session_state.get(k_txt, "")).strip():
+                        chosen.append(str(st.session_state.get(k_txt, "")).strip())
+
                     st.divider()
+
                 return chosen
 
             colL, colR = st.columns(2)
@@ -1128,9 +1134,9 @@ AI 將依照「帳戶層級 → 行銷活動 → AdSet → 廣告 → 30 日趨�
                     st.session_state[k_actions] = "\n".join(p.get("actions", []) or [])
 
                 st.markdown(f"**{t}**")
-                st.session_state[k_on] = st.checkbox("採用此計畫", value=st.session_state[k_on], key=k_on)
-                st.session_state[k_reason] = st.text_area("理由（可改）", value=st.session_state[k_reason], height=80, key=k_reason)
-                st.session_state[k_actions] = st.text_area("具體動作（每行一條，可改）", value=st.session_state[k_actions], height=100, key=k_actions)
+                st.checkbox("採用此計畫", key=k_on)
+                st.text_area("理由（可改）", height=80, key=k_reason)
+                st.text_area("具體動作（每行一條，可改）", height=100, key=k_actions)
 
                 if st.session_state[k_on]:
                     actions_list = [x.strip() for x in st.session_state[k_actions].splitlines() if x.strip()]
