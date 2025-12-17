@@ -31,133 +31,106 @@ except ModuleNotFoundError:
 # 0. 全域設定：AI 顧問指令（v4.0 深度細節+高階邏輯完全體）
 # ==========================================
 AI_CONSULTANT_PROMPT = """
-# Role｜你的身份不是分析師，是「媒體採買裁判」
-你是一位資深成效廣告顧問，但此任務中你**不是負責解釋數據**，
-而是負責在資訊不完美的情況下，做出「可執行的媒體採買裁決」。
+# Role
+你是一位資深成效廣告分析師，同時也是「媒體採買決策顧問」。
+你的分析風格必須兼具**「數據顆粒度的細膩拆解」**與**「預算配置的戰略判斷」**。
+請使用繁體中文回答，語氣專業精準、條列清楚、直接給可執行決策。
 
-你的任務不是給可能性，而是：
-- 判斷哪個方向是對的
-- 哪些素材 / 組合該被保留、關閉、拆分或獨立
-- 明確告訴我「現在該動誰、不該動誰」
-
-請使用 **繁體中文**，語氣務實、精準、偏決策而非教學。
+# 資料來源說明
+系統會提供多個表格（Daily Alerts, Weekly Trends, P7D Campaign/AdSet/Ad, 30D Trend, CPM Change）。
+請綜合這些數據進行分析。
 
 ---
 
-# 資料說明
-系統會提供以下資料表（不一定全部齊全）：
-- Daily Alerts（P1D vs P7D）
-- Weekly Trends（P7D vs PP7D）
-- P7D / PP7D / P30D Campaign / AdSet / Ad 表
-- CPM Change Table（P7D vs PP7D vs P30D）
+# 分析任務要求（請務必依序完成，不可省略細節）
 
-請在「資料可能不完整」的前提下仍做出判斷，必要時標註不確定性來源。
-
----
-
-# 🔴 核心規則（非常重要）
-你**不可只做分析說明**，必須完成「裁決」。
-每一則廣告、每一個廣告組合，**必須被歸類到下列六種決策類型之一，而且只能選一種**。
+## 1. 帳戶整體快速總結 & 風險預警
+- **整體狀態**：描述帳戶目前是「偏穩定 / 輕微惡化 / 明顯惡化 / 有成長空間」。
+- **數據概覽**：近 7 日整體 CPA 與轉換量的大致水位。
+- **【關鍵偵測】**：請直接點出帳戶中是否存在**「預算吸血鬼」**（高花費、高 CTR 但低 CVR 的素材）或**「新舊素材預算排擠」**現象？這是否為當前成效受阻的主因？
+- 若樣本數偏低，請標註「樣本不足風險」。
 
 ---
 
-## 🧭 強制決策分類（不得新增或合併類別）
-
-### A. ✅ 方向正確的代表（Direction Proof）
-定義：
-- 整體 CPA 明顯優於帳戶平均或同層級中位數
-- CTR / CVR 至少一項具備說服力
-- 即使 CPM 偏高，仍能轉換，代表「方向是對的」
-
-👉 意義：這是「訊息 × 受眾 × 素材」正確性的證據
+## 2. 🚨 昨日救火清單 (Daily Alerts)
+- 僅針對 **Daily Alerts Table** 中有異常的活動。
+- 格式：
+  - 【層級：行銷活動】〈名稱〉
+    - 問題來源：Daily Alert（CPA 暴漲 / CTR 驟降 / 高花費 0 轉換）
+    - 關鍵數字：昨日 vs 均值對比
+    - **急救指令**：暫停 / 降預算 / 檢查設定（請給出明確動作）
 
 ---
 
-### B. 🧩 組合表現良好（Good Combo）
-定義：
-- 在「目前 AdSet 結構」中相對其他素材表現穩定
-- 不一定是帳戶最佳，但是該組合的健康成員
-
-👉 意義：這個組合內部邏輯成立，可維持
-
----
-
-### C. ❌ 在此組合應被關閉（Kill in This Combo）
-定義：
-- 在此 AdSet 中 CTR / CVR 明顯落後
-- 持續吸收預算卻無法帶來對等轉換
-- 拖累該組合整體 CPA
-
-👉 注意：這代表「在這個組合該關」，**不等於素材永久報廢**
+## 3. 📉 週環比衰退診斷 (Weekly Trends)
+- 針對 **Weekly Trends Table** 中「明顯惡化」的活動，請依據數據特徵分類（可複選）：
+  1. **「擴量效率差」**：花費大幅增加，CPA 同步變差（邊際效益遞減）。
+  2. **「素材疲乏 / CTR 衰退」**：CTR 明顯下降，導致 CPC 變貴。
+  3. **「轉換效率下降」**：CTR 持平，但 CVR 下降（落地頁或受眾意圖問題）。
+- 每個惡化活動請給出具體建議（減碼 / 重構 / 換素材）。
 
 ---
 
-### D. 🕳️ 被組合掩埋的潛力素材（Buried Potential）
-定義：
-- CTR / CVR 不差，甚至優於平均
-- 但曝光或花費明顯過低
-- 同組存在歷史王者或高 CTR 吸血素材
+## 3.5 💰 CPM 變化與成本結構連動（核心洞察）
+- 結合 **CPM 變化表** 與 **P7D/30D 數據**，分析競價環境對 CPA 的影響。請依照以下情境邏輯進行推論：
 
-👉 意義：素材可能好，但被系統偏食或歷史數據壓制
-
----
-
-### E. 🚀 值得獨立給預算（Spin-off Candidate）
-定義：
-- 在有限預算或不利環境下仍能維持好 CPA
-- 表現穩定，方向明確
-- 具備「如果給乾淨環境可能擴量」的特徵
-
-👉 意義：值得獨立成立新 AdSet / Campaign 測試或擴量
+  1. **CPM 上升 + CPA 也上升**：
+     - 診斷：競價變貴且轉化未跟上，成本結構惡化。建議檢查是否受眾過窄或競爭加劇。
+  2. **CPM 上升 + CPA 持平/下降**：
+     - 診斷：**高品質流量**。雖然貴但受眾精準（CVR 高），是值得保護的黃金區塊。
+  3. **CPM 下降 + CPA 沒改善/變差**：
+     - 診斷：**劣質流量陷阱**。買到了便宜曝光，但受眾不買單（CVR 低）。建議排除特定版位或緊縮受眾。
+  4. **CPM 下降 + CPA 改善**：
+     - 診斷：市場紅利或素材中了，應考慮擴量。
 
 ---
 
-### F. 🛑 維持不動（Do Nothing / Protect）
-定義：
-- 表現穩定但不特別亮眼
-- 屬於帳戶的安全基本盤
-- 改動風險高於潛在收益
+## 4. 🩸 深度診斷：預算效率與元兇定位 (AdSet & Ad Level)
+**這是最重要的段落。請利用 P7D AdSet/Ad 表格，執行「微觀偵測」：**
 
-👉 意義：不要為了優化而破壞穩定現金流
+1.  **偵測「預算吸血鬼」(Vampire Creatives)**：
+    - 找出花費排名前 20% 的素材中，是否有 **「CTR 高 (吸睛) 但 CVR 顯著低於平均」** 的廣告？
+    - **診斷**：它造成了「高點擊假象」，騙取了系統預算。**建議動作：立即暫停。**
 
----
+2.  **偵測「系統偏食症」(System Bias / Cannibalization)**：
+    - 檢查同一 AdSet 內，是否有 **「新素材 (如 202512xx)」CPA 優於「舊素材」，但花費卻遠低於舊素材**？
+    - **診斷**：舊素材憑藉歷史數據霸佔預算，導致新素材無法發揮。**建議動作：暫停同組內的舊素材，強迫預算流向新素材。**
 
-# 📌 輸出要求（不可省略）
-
-## 1️⃣ 帳戶層級裁決摘要
-- 目前帳戶整體狀態（穩定 / 有結構問題 / 方向正確但配置錯）
-- 是否存在：
-  - 預算吸血鬼
-  - 系統偏食（新素材被壓制）
-  - 組合內部互相拖累
+3.  **One Bad Apple (害群之馬) 理論**：
+    - 當某個 AdSet CPA 過高時，檢查是否 **「只有一支爛廣告在拖累」**？
+    - **診斷**：若是，**建議「關閉該廣告」而非「關閉整個 AdSet」**；若全體廣告都差，才建議關閉 AdSet。
 
 ---
 
-## 2️⃣ 強制決策清單（核心）
-請依序列出 A → F 六類，每一類至少包含：
-- 廣告 / 廣告組合名稱
-- 關鍵數據（CPA / CTR / CVR / CPM）
-- 為何「相對於誰」而做此判斷
-- 明確動作指令（關閉 / 移出 / 獨立 / 保留）
+## 5. 📈 擴量與加碼機會 (Scaling)
+- 找出兩類目標：
+  1. **「可加碼潛力股」**：CPA 低於帳戶平均，且預算佔比尚低（通常是被埋沒的新素材或新受眾）。
+  2. **「穩定基本盤」**：CPA 穩定、量體大的舊活動。
+- 建議：明確指出哪個 AdSet/廣告 值得加碼，以及加碼的方式（直接加預算 / 獨立出來開新活動）。
 
 ---
 
-## 3️⃣ 行動版待辦清單（給人直接照做）
-請輸出一份可直接執行的清單，格式如下：
+## 6. ✅ 優先級待辦清單 (Action Plan)
+請將所有分析收斂為三類具體指令，並**註明判斷依據**：
 
-- [暫停] Ad X（原因：C 類，在此組合拖累 CPA）
-- [拆分] Ad Y → 新 AdSet（原因：E 類，具獨立擴量潛力）
-- [保留不動] AdSet Z（原因：F 類，穩定基本盤）
+1.  **Priority A：止血與清創（立即執行）**
+    - 針對「預算吸血鬼」、「高花費 0 轉換」與「CPA 嚴重超標」項目的處決指令。
+    - **指令格式**：`[暫停]` 廣告 X（依據：吸血鬼素材，高點擊低轉換）
+
+2.  **Priority B：導流與優化（資源重分配）**
+    - 針對「資源錯置」與「系統偏食」的修正。
+    - **指令格式**：`[暫停]` AdSet Y 中的舊素材 A，`[保留]` 新素材 B（依據：CPA B < A，強迫導流測試新素材）
+
+3.  **Priority C：保護基本盤（請勿更動）**
+    - 點名那些「雖然舊但很穩」的黃金素材/受眾。
+    - **指令格式**：`[維持]` AdSet Z（依據：穩定獲利來源，勿因擴量測試而干擾）
 
 ---
 
-# ⚠️ 重要提醒
-- 若資料不足，請說明「哪一段判斷風險較高」
-- 若某素材不是爛，而是「放錯地方」，請明確指出
-- 請避免模糊建議（如：可考慮、也許、可能）
-
-你現在是裁判，不是旁白。
-
+# 回覆格式要求
+- 必須使用標題與條列明確分段。
+- 每一項建議都必須有**數據支持**（例如引用 CPA / CTR / CVR 數值）。
+- 在提到的成本時，請明確區分是 CPA (轉換成本) 還是 CPM (曝光成本)。
 """
 
 # ==========================================
@@ -242,14 +215,19 @@ def calculate_consolidated_metrics(df_group, conv_col):
     df_metrics['CPM (TWD)'] = df_metrics.apply(
         lambda x: (x['花費金額 (TWD)'] / x['曝光次數']) * 1000 if x['曝光次數'] > 0 else 0, axis=1
     )
-    
+
+    df_metrics['CPC (TWD)'] = df_metrics.apply(
+        lambda x: x['花費金額 (TWD)'] / x['連結點擊次數'] if x['連結點擊次數'] > 0 else 0, axis=1
+    )
+
     df_metrics = df_metrics.round(2).sort_values(by='花費金額 (TWD)', ascending=False)
 
     metric_config = {
         'CPA (TWD)': ('花費金額 (TWD)', conv_col, 1),
         'CTR (%)': ('連結點擊次數', '曝光次數', 100),
         'CVR (%)': (conv_col, '連結點擊次數', 100),
-        'CPM (TWD)': ('花費金額 (TWD)', '曝光次數', 1000)
+        'CPM (TWD)': ('花費金額 (TWD)', '曝光次數', 1000),
+        'CPC (TWD)': ('花費金額 (TWD)', '連結點擊次數', 1)
     }
     summary_row = create_summary_row(df_metrics, metric_config)
     
@@ -557,6 +535,29 @@ def get_top_by_spend(df, n=20, min_spend=0):
 
     return tmp
 
+
+def calc_period_overall(df_period, conv_col):
+    """
+    計算期間整體（帳戶層級）指標：花費 / 轉換 / CPA / CTR / CPC
+    - 使用原始明細 df_period 聚合，避免受中間匯總表結構影響
+    """
+    spend = float(df_period['花費金額 (TWD)'].sum()) if '花費金額 (TWD)' in df_period.columns else 0.0
+    conv = float(df_period[conv_col].sum()) if conv_col in df_period.columns else 0.0
+    clicks = float(df_period['連結點擊次數'].sum()) if '連結點擊次數' in df_period.columns else 0.0
+    impr = float(df_period['曝光次數'].sum()) if '曝光次數' in df_period.columns else 0.0
+
+    cpa = (spend / conv) if conv > 0 else 0.0
+    ctr = (clicks / impr * 100) if impr > 0 else 0.0
+    cpc = (spend / clicks) if clicks > 0 else 0.0
+
+    return {
+        'spend': round(spend, 0),
+        'conv': round(conv, 0),
+        'cpa': round(cpa, 2),
+        'ctr': round(ctr, 2),
+        'cpc': round(cpc, 2),
+    }
+
 def call_gemini_analysis(
     api_key,
     alerts_daily,
@@ -788,7 +789,7 @@ if uploaded_file is not None:
         )
 
         # --- UI Tabs ---
-        tab1, tab2, tab3 = st.tabs(["📈 戰情室 & 雙重監控", "📑 詳細數據表 (AdSet+Ad)", "🤖 AI 深度診斷 (Gemini)"])
+        tab1, tab2, tab3, tab4 = st.tabs(["📈 戰情室 & 雙重監控", "📑 詳細數據表 (AdSet+Ad)", "🤖 AI 深度診斷 (Gemini)", "🧾 週報產生器 (LINE Markdown)"])
         
         # ========== Tab 1：戰情室 ==========
         with tab1:
@@ -908,6 +909,289 @@ AI 將依照「帳戶層級 → 行銷活動 → AdSet → 廣告 → 30 日趨�
                 st.markdown("### 📝 AI 診斷報告")
                 st.markdown("---")
                 st.markdown(st.session_state['gemini_result'])
+
+
+        # ========== Tab 4：週報產生器（LINE Markdown） ==========
+        PLAN_TYPES = [
+            "1. 做簡易的開關、預算調配即可",
+            "2. 補素材",
+            "3. 補受眾",
+            "4. 進行到達頁面優化",
+            "5. 預算縮減、提高",
+            "6. 維持即可",
+        ]
+
+        def _fmt_pct(x):
+            return f"{x:.2f}%"
+
+        def _fmt_money(x):
+            return f"${x:,.0f}"
+
+        def _weekly_report_ai_prompt(p7_overall, pp7_overall, top_adsets_p7, top_ads_p7):
+            return f"""
+你是一位成效廣告代操顧問。請用「可直接貼給客戶的週報語氣」輸出繁體中文，保持簡潔、可執行。
+
+【本週 P7D 概況】
+- 花費：{p7_overall['spend']}
+- 轉換：{p7_overall['conv']}
+- CPA：{p7_overall['cpa']}
+- CTR：{p7_overall['ctr']}%
+- CPC：{p7_overall['cpc']}
+
+【上週 PP7D 概況】
+- 花費：{pp7_overall['spend']}
+- 轉換：{pp7_overall['conv']}
+- CPA：{pp7_overall['cpa']}
+- CTR：{pp7_overall['ctr']}%
+- CPC：{pp7_overall['cpc']}
+
+【AdSet（視為受眾單位）P7D Top】
+{safe_to_markdown(top_adsets_p7)}
+
+【Ad（視為素材單位）P7D Top】
+{safe_to_markdown(top_ads_p7)}
+
+請輸出 JSON（務必是 JSON，不能有多餘文字），格式如下：
+{{
+  "status_summary": "一段 2~4 句的現況描述（包含：哪些受眾有效/無效、哪些素材有效/無效）",
+  "audience_effective": ["受眾/AdSet A（理由）", "..."],
+  "audience_ineffective": ["受眾/AdSet B（理由）", "..."],
+  "creative_effective": ["素材/Ad X（理由）", "..."],
+  "creative_ineffective": ["素材/Ad Y（理由）", "..."],
+  "next_week_plan_reco": [
+    {{
+      "type": "1. 做簡易的開關、預算調配即可",
+      "recommend": true,
+      "reason": "為何建議/不建議",
+      "actions": ["具體動作 1", "具體動作 2"]
+    }}
+  ]
+}}
+"""
+
+        def _try_parse_json(s):
+            try:
+                return json.loads(s)
+            except Exception:
+                s2 = re.sub(r"^```json\s*|\s*```$", "", str(s).strip(), flags=re.IGNORECASE)
+                try:
+                    return json.loads(s2)
+                except Exception:
+                    return None
+
+        with tab4:
+            st.subheader("🧾 每週周報（可貼 LINE）")
+            st.caption("流程：AI 先產草案 → 你勾選/編輯 → 產出 Markdown")
+
+            # 1) P7D / PP7D 帳戶概況
+            p7_overall = calc_period_overall(df_p7d, conversion_col)
+            pp7_overall = calc_period_overall(df_pp7d, conversion_col)
+
+            # 2) 取受眾/素材 Top（避免把整張表丟給 AI 太長）
+            top_adsets = get_top_by_spend(p7_adset_df, n=12, min_spend=500)
+            top_ads = get_top_by_spend(p7_ad_df, n=12, min_spend=300)
+
+            # 3) 顯示概況
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**P7D 概況**")
+                st.write({
+                    "花費": _fmt_money(p7_overall["spend"]),
+                    "轉換": int(p7_overall["conv"]),
+                    "CPA": _fmt_money(p7_overall["cpa"]),
+                    "CTR": _fmt_pct(p7_overall["ctr"]),
+                    "CPC": _fmt_money(p7_overall["cpc"]),
+                })
+            with c2:
+                st.markdown("**PP7D 概況**")
+                st.write({
+                    "花費": _fmt_money(pp7_overall["spend"]),
+                    "轉換": int(pp7_overall["conv"]),
+                    "CPA": _fmt_money(pp7_overall["cpa"]),
+                    "CTR": _fmt_pct(pp7_overall["ctr"]),
+                    "CPC": _fmt_money(pp7_overall["cpc"]),
+                })
+
+            st.divider()
+
+            # 4) 生成週報草案（AI）
+            if "weekly_draft" not in st.session_state:
+                st.session_state["weekly_draft"] = None
+
+            col_btn, col_hint = st.columns([1, 3])
+            with col_btn:
+                gen_weekly = st.button("🤖 生成週報草案", type="primary")
+            with col_hint:
+                st.info("會輸出：現況描述 / 有效無效受眾與素材 / 下週計畫（6 類）→ 你再勾選與改字")
+
+            if gen_weekly:
+                if not gemini_api_key:
+                    st.warning("⚠️ 請先於左側側邊欄輸入 Gemini API Key")
+                else:
+                    prompt = _weekly_report_ai_prompt(p7_overall, pp7_overall, top_adsets, top_ads)
+                    with st.spinner("AI 週報草案生成中..."):
+                        try:
+                            if HAS_GENAI:
+                                genai.configure(api_key=gemini_api_key)
+                                model = genai.GenerativeModel("gemini-2.5-pro")
+                                resp = model.generate_content(prompt)
+                                raw_text = resp.text if hasattr(resp, "text") else str(resp)
+                            else:
+                                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={gemini_api_key}"
+                                headers = {"Content-Type": "application/json"}
+                                data = {"contents": [{"parts": [{"text": prompt}]}]}
+                                r = requests.post(url, headers=headers, json=data)
+                                if r.status_code == 200:
+                                    j = r.json()
+                                    raw_text = j["candidates"][0]["content"]["parts"][0]["text"]
+                                else:
+                                    raw_text = ""
+                        except Exception as e:
+                            raw_text = ""
+
+                    parsed = _try_parse_json(raw_text)
+                    if not parsed:
+                        st.error("AI 回傳不是可解析 JSON（可能混入其它文字）。你可以把回傳貼到下方手動修正。")
+                        st.text_area("AI 原始回傳", value=str(raw_text), height=220)
+                    else:
+                        st.session_state["weekly_draft"] = parsed
+
+            draft = st.session_state.get("weekly_draft")
+            if not draft:
+                st.stop()
+
+            st.divider()
+            st.subheader("✍️ 你可勾選、編輯、補充")
+
+            # 5) 現況描述（可編輯）
+            status_summary = st.text_area(
+                "現況描述（可改）",
+                value=str(draft.get("status_summary", "")),
+                height=120
+            )
+
+            # 6) 有效/無效受眾與素材：勾選 + 可編輯
+            def editable_checklist(title, items, key_prefix):
+                st.markdown(f"### {title}")
+                chosen = []
+                for i, it in enumerate(items or []):
+                    k_chk = f"{key_prefix}_chk_{i}"
+                    k_txt = f"{key_prefix}_txt_{i}"
+
+                    if k_chk not in st.session_state:
+                        st.session_state[k_chk] = True
+                    if k_txt not in st.session_state:
+                        st.session_state[k_txt] = str(it)
+
+                    st.session_state[k_chk] = st.checkbox("採用", value=st.session_state[k_chk], key=k_chk)
+                    st.session_state[k_txt] = st.text_input("內容", value=st.session_state[k_txt], key=k_txt)
+
+                    if st.session_state[k_chk] and st.session_state[k_txt].strip():
+                        chosen.append(st.session_state[k_txt].strip())
+                    st.divider()
+                return chosen
+
+            colL, colR = st.columns(2)
+            with colL:
+                aud_eff = editable_checklist("✅ 有效受眾（AdSet）", draft.get("audience_effective", []), "aud_eff")
+                aud_bad = editable_checklist("❌ 無效受眾（AdSet）", draft.get("audience_ineffective", []), "aud_bad")
+            with colR:
+                cre_eff = editable_checklist("✅ 有效素材（Ad）", draft.get("creative_effective", []), "cre_eff")
+                cre_bad = editable_checklist("❌ 無效素材（Ad）", draft.get("creative_ineffective", []), "cre_bad")
+
+            st.divider()
+
+            # 7) 下週計畫：6 類型逐一顯示（勾選採用 + 編輯理由 + 編輯 actions）
+            st.markdown("### 📌 下週計畫（你決定採用哪些）")
+            plan_recos = draft.get("next_week_plan_reco", [])
+
+            reco_map = {p.get("type"): p for p in plan_recos if isinstance(p, dict) and p.get("type")}
+            merged_plans = []
+            for t in PLAN_TYPES:
+                p = reco_map.get(t, {"type": t, "recommend": False, "reason": "", "actions": []})
+                merged_plans.append(p)
+
+            selected_plans = []
+            for idx, p in enumerate(merged_plans):
+                t = p.get("type", "")
+                default_on = bool(p.get("recommend", False))
+
+                k_on = f"plan_on_{idx}"
+                k_reason = f"plan_reason_{idx}"
+                k_actions = f"plan_actions_{idx}"
+
+                if k_on not in st.session_state:
+                    st.session_state[k_on] = default_on
+                if k_reason not in st.session_state:
+                    st.session_state[k_reason] = str(p.get("reason", ""))
+                if k_actions not in st.session_state:
+                    st.session_state[k_actions] = "\n".join(p.get("actions", []) or [])
+
+                st.markdown(f"**{t}**")
+                st.session_state[k_on] = st.checkbox("採用此計畫", value=st.session_state[k_on], key=k_on)
+                st.session_state[k_reason] = st.text_area("理由（可改）", value=st.session_state[k_reason], height=80, key=k_reason)
+                st.session_state[k_actions] = st.text_area("具體動作（每行一條，可改）", value=st.session_state[k_actions], height=100, key=k_actions)
+
+                if st.session_state[k_on]:
+                    actions_list = [x.strip() for x in st.session_state[k_actions].splitlines() if x.strip()]
+                    selected_plans.append({
+                        "type": t,
+                        "reason": st.session_state[k_reason].strip(),
+                        "actions": actions_list
+                    })
+                st.divider()
+
+            # 8) 補充輸入框
+            client_note = st.text_area("補充說明（可選）", value="", height=120)
+
+            # 9) 拼 Markdown（LINE 可貼）
+            def build_markdown():
+                lines = []
+                lines.append("## 📊 本週廣告週報")
+                lines.append("")
+                lines.append("### 1) 簡要概況")
+                lines.append(f"- **P7D** 花費 {_fmt_money(p7_overall['spend'])}｜轉換 {int(p7_overall['conv'])}｜CPA {_fmt_money(p7_overall['cpa'])}｜CTR {_fmt_pct(p7_overall['ctr'])}｜CPC {_fmt_money(p7_overall['cpc'])}")
+                lines.append(f"- **PP7D** 花費 {_fmt_money(pp7_overall['spend'])}｜轉換 {int(pp7_overall['conv'])}｜CPA {_fmt_money(pp7_overall['cpa'])}｜CTR {_fmt_pct(pp7_overall['ctr'])}｜CPC {_fmt_money(pp7_overall['cpc'])}")
+                lines.append("")
+                lines.append("### 2) 現況描述")
+                if status_summary.strip():
+                    lines.append(status_summary.strip())
+                lines.append("")
+                lines.append("### 3) 受眾與素材表現")
+                if aud_eff:
+                    lines.append("**✅ 有效受眾（AdSet）**")
+                    lines += [f"- {x}" for x in aud_eff]
+                if aud_bad:
+                    lines.append("**❌ 無效受眾（AdSet）**")
+                    lines += [f"- {x}" for x in aud_bad]
+                if cre_eff:
+                    lines.append("**✅ 有效素材（Ad）**")
+                    lines += [f"- {x}" for x in cre_eff]
+                if cre_bad:
+                    lines.append("**❌ 無效素材（Ad）**")
+                    lines += [f"- {x}" for x in cre_bad]
+                lines.append("")
+                lines.append("### 4) 下週計畫")
+                if selected_plans:
+                    for p in selected_plans:
+                        lines.append(f"**{p['type']}**")
+                        if p.get("reason"):
+                            lines.append(f"- 理由：{p['reason']}")
+                        if p.get("actions"):
+                            lines.append("- 動作：")
+                            lines += [f"  - {a}" for a in p["actions"]]
+                else:
+                    lines.append("- 本週建議維持為主，先觀察數據穩定性。")
+                if client_note.strip():
+                    lines.append("")
+                    lines.append("### 5) 補充")
+                    lines.append(client_note.strip())
+                return "\n".join(lines)
+
+            md = build_markdown()
+
+            st.subheader("📋 可複製 Markdown（貼給客戶）")
+            st.code(md, language="markdown")
 
         # ========== 側邊欄：下載 Excel ==========
         with st.sidebar:
