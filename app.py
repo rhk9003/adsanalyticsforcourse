@@ -127,6 +127,22 @@ AI_CONSULTANT_PROMPT = """
 
 ---
 
+
+## 7. 🧪 新項目帶動判斷（必填）
+請根據系統提供的「New Creatives Summary」與「New AdSets Summary」回答兩題，必須引用數字：
+
+1) 新素材是否有帶動整體成長？
+- 結論：有 / 沒有 / 不確定（資料不足）
+- 依據：新素材的「轉換占比(%)、花費占比(%)、CPA vs 全帳戶 P7D CPA」並引用數字
+- 動作：加碼 / 保留觀察 / 淘汰 / 拆分獨立
+
+2) 新廣告組合是否有帶動成長？
+- 結論：有 / 沒有 / 不確定
+- 依據：PP7D→P7D 花費變化（新組合判定）、轉換占比(%)、CPA 表現（引用數字）
+- 動作：擴量 / 拆分獨立 / 停止測試
+
+---
+
 # 回覆格式要求
 - 必須使用標題與條列明確分段。
 - 每一項建議都必須有**數據支持**（例如引用 CPA / CTR / CVR 數值）。
@@ -159,6 +175,97 @@ font_prop = get_chinese_font()
 def clean_ad_name(name):
     return re.sub(r' - 複本.*$', '', str(name)).strip()
 
+
+# --- 新素材/新組合判定（低 token：程式先聚合，AI 只判讀） ---
+DATE_RE = re.compile(r'(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])')  # YYYYMMDD
+
+def extract_yyyymmdd(s: str):
+    """從字串中抓出第一個 YYYYMMDD，回傳 date 或 None"""
+    m = DATE_RE.search(str(s))
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(0), "%Y%m%d").date()
+    except Exception:
+        return None
+
+def is_recent_date(d, anchor_date, days=14):
+    """以 anchor_date（資料 max_date）為基準，判斷 d 是否在最近 N 天內"""
+    if not d:
+        return False
+    if isinstance(anchor_date, pd.Timestamp):
+        anchor_date = anchor_date.date()
+    return (anchor_date - d).days >= 0 and (anchor_date - d).days <= days
+
+def build_new_creatives_summary(df_p7d, conv_col, anchor_date, recent_days=14, top_n=15, min_spend=300):
+    """新素材（廣告）摘要：依名稱中的 YYYYMMDD 判定「近期新素材」"""
+    if df_p7d is None or df_p7d.empty:
+        return pd.DataFrame()
+
+    tmp = df_p7d.copy()
+    tmp['廣告名稱_clean'] = tmp['廣告名稱'].apply(clean_ad_name)
+    tmp['creative_date'] = tmp['廣告名稱'].apply(extract_yyyymmdd)
+    tmp['is_new_creative'] = tmp['creative_date'].apply(lambda d: is_recent_date(d, anchor_date, days=recent_days))
+
+    agg = tmp.groupby(['廣告名稱_clean', 'is_new_creative'], as_index=False).agg({
+        '花費金額 (TWD)': 'sum',
+        conv_col: 'sum',
+        '連結點擊次數': 'sum',
+        '曝光次數': 'sum'
+    })
+
+    agg['CPA (TWD)'] = agg.apply(lambda x: x['花費金額 (TWD)'] / x[conv_col] if x[conv_col] > 0 else 0, axis=1)
+    agg['CTR (%)'] = agg.apply(lambda x: (x['連結點擊次數'] / x['曝光次數']) * 100 if x['曝光次數'] > 0 else 0, axis=1)
+    agg['CPC (TWD)'] = agg.apply(lambda x: x['花費金額 (TWD)'] / x['連結點擊次數'] if x['連結點擊次數'] > 0 else 0, axis=1)
+
+    total_spend = agg['花費金額 (TWD)'].sum()
+    total_conv = agg[conv_col].sum()
+    agg['花費占比(%)'] = agg['花費金額 (TWD)'].apply(lambda v: (v / total_spend * 100) if total_spend > 0 else 0)
+    agg['轉換占比(%)'] = agg[conv_col].apply(lambda v: (v / total_conv * 100) if total_conv > 0 else 0)
+
+    agg = agg[agg['花費金額 (TWD)'] >= min_spend].copy()
+    agg = agg.sort_values(['is_new_creative', '花費金額 (TWD)'], ascending=[False, False]).head(top_n)
+
+    return agg.round(2)
+
+def build_new_adsets_summary(df_p7d, df_pp7d, conv_col, top_n=15, min_spend_p7=500, old_spend_threshold=200):
+    """新廣告組合判定：PP7D 花費很低但 P7D 有明顯花費"""
+    if df_p7d is None or df_p7d.empty:
+        return pd.DataFrame()
+
+    def agg_adset(df):
+        if df is None or df.empty:
+            return pd.DataFrame(columns=['行銷活動名稱', '廣告組合名稱', '花費金額 (TWD)', '轉換', '連結點擊次數', '曝光次數'])
+        tmp = df.groupby(['行銷活動名稱', '廣告組合名稱'], as_index=False).agg({
+            '花費金額 (TWD)': 'sum',
+            conv_col: 'sum',
+            '連結點擊次數': 'sum',
+            '曝光次數': 'sum'
+        })
+        tmp = tmp.rename(columns={conv_col: '轉換'})
+        return tmp
+
+    p7 = agg_adset(df_p7d)
+    pp7 = agg_adset(df_pp7d)[['行銷活動名稱', '廣告組合名稱', '花費金額 (TWD)']].rename(columns={'花費金額 (TWD)': '花費金額_PP7D'})
+
+    merged = p7.merge(pp7, on=['行銷活動名稱', '廣告組合名稱'], how='left')
+    merged['花費金額_PP7D'] = merged['花費金額_PP7D'].fillna(0)
+
+    merged['is_new_adset'] = (merged['花費金額_PP7D'] < old_spend_threshold) & (merged['花費金額 (TWD)'] >= min_spend_p7)
+
+    merged['CPA (TWD)'] = merged.apply(lambda x: x['花費金額 (TWD)'] / x['轉換'] if x['轉換'] > 0 else 0, axis=1)
+    merged['CTR (%)'] = merged.apply(lambda x: (x['連結點擊次數'] / x['曝光次數']) * 100 if x['曝光次數'] > 0 else 0, axis=1)
+    merged['CPC (TWD)'] = merged.apply(lambda x: x['花費金額 (TWD)'] / x['連結點擊次數'] if x['連結點擊次數'] > 0 else 0, axis=1)
+
+    total_spend = merged['花費金額 (TWD)'].sum()
+    total_conv = merged['轉換'].sum()
+    merged['花費占比(%)'] = merged['花費金額 (TWD)'].apply(lambda v: (v / total_spend * 100) if total_spend > 0 else 0)
+    merged['轉換占比(%)'] = merged['轉換'].apply(lambda v: (v / total_conv * 100) if total_conv > 0 else 0)
+
+    merged = merged.sort_values(['is_new_adset', '花費金額 (TWD)'], ascending=[False, False]).head(top_n)
+
+    return merged.round(2)
+# --- end ---
 def create_summary_row(df, metric_cols):
     """
     metric_cols: dict
@@ -566,7 +673,9 @@ def call_gemini_analysis(
     adset_p7=None,
     ad_p7=None,
     trend_30d=None,
-    cpm_change_table=None
+    cpm_change_table=None,
+    new_creatives=None,
+    new_adsets=None
 ):
     data_context = "\n\n# 📊 Account Data Summary（多層級視角）\n"
 
@@ -608,6 +717,15 @@ def call_gemini_analysis(
     if cpm_change_table is not None and not cpm_change_table.empty:
         data_context += "\n\n## 7. CPM Change Table (P7D vs PP7D vs P30D, Campaign Level)\n"
         data_context += safe_to_markdown(cpm_change_table)
+
+    # 新素材 / 新組合摘要（低 token）
+    if new_creatives is not None and not new_creatives.empty:
+        data_context += "\n\n## 8. New Creatives Summary (Recent Creatives, P7D Top)\n"
+        data_context += safe_to_markdown(new_creatives)
+
+    if new_adsets is not None and not new_adsets.empty:
+        data_context += "\n\n## 9. New AdSets Summary (New AdSets by Spend Shift, P7D Top)\n"
+        data_context += safe_to_markdown(new_adsets)
 
     full_prompt = (
         AI_CONSULTANT_PROMPT
@@ -753,6 +871,25 @@ if uploaded_file is not None:
         df_p7d = df_std[(df_std['天數'] >= p7d_start) & (df_std['天數'] <= p7d_end)].copy()
         df_pp7d = df_std[(df_std['天數'] >= pp7d_start) & (df_std['天數'] <= pp7d_end)].copy()
         df_p30d = df_std[(df_std['天數'] >= p30d_start) & (df_std['天數'] <= p30d_end)].copy()
+
+        # 新素材 / 新廣告組合摘要（供 AI 判讀：避免丟全量表造成 token 壓力）
+        new_creatives_df = build_new_creatives_summary(
+            df_p7d=df_p7d,
+            conv_col=conversion_col,
+            anchor_date=max_date,
+            recent_days=14,
+            top_n=15,
+            min_spend=300
+        )
+
+        new_adsets_df = build_new_adsets_summary(
+            df_p7d=df_p7d,
+            df_pp7d=df_pp7d,
+            conv_col=conversion_col,
+            top_n=15,
+            min_spend_p7=500,
+            old_spend_threshold=200
+        )
         
         # 各區間 Campaign 層級
         res_p1d_camp = calculate_consolidated_metrics(df_p1d.groupby('行銷活動名稱'), conversion_col)
@@ -901,7 +1038,9 @@ AI 將依照「帳戶層級 → 行銷活動 → AdSet → 廣告 → 30 日趨�
                         adset_p7=p7_adset_df,
                         ad_p7=p7_ad_df,
                         trend_30d=trend_30d_df,
-                        cpm_change_table=cpm_change_df
+                        cpm_change_table=cpm_change_df,
+                        new_creatives=new_creatives_df,
+                        new_adsets=new_adsets_df
                     )
                     st.session_state['gemini_result'] = analysis_result
             
