@@ -152,7 +152,7 @@ AI_CONSULTANT_PROMPT = """
 # ==========================================
 # 1. 基礎設定與字型處理
 # ==========================================
-st.set_page_config(page_title="廣告成效全能分析 v6.3 (Gemini 2.5 Pro + CPM)", layout="wide")
+st.set_page_config(page_title="廣告成效全能分析 v6.4 (Dashboard + Instant DL)", layout="wide")
 
 @st.cache_resource
 def get_chinese_font():
@@ -765,7 +765,7 @@ def call_gemini_analysis(
 # ==========================================
 # 6. 主程式 UI
 # ==========================================
-st.title("📊 廣告成效全能分析 v6.3 (Gemini 2.5 Pro + CPM)")
+st.title("📊 廣告成效全能分析 v6.4 (Dashboard + Instant DL)")
 
 if not HAS_GENAI:
     st.warning("ℹ️ 提示：未偵測到 `google-generativeai` 套件。系統將自動切換為 **REST API 兼容模式** (只需 API Key 即可運作)。")
@@ -925,9 +925,120 @@ if uploaded_file is not None:
             p30_camp_df
         )
 
-        # --- UI Tabs ---
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 戰情室 & 雙重監控", "📑 詳細數據表 (AdSet+Ad)", "🤖 AI 深度診斷 (Gemini)", "🧾 週報產生器 (LINE Markdown)"])
+        # ==========================================
+        # [NEW] 調整 1：將下載邏輯提前至此（確保沒做 AI 也能下載）
+        # ==========================================
+        excel_stack = []
+        excel_stack.append(('Trend_Daily_30D', trend_30d_df))
+        if cpm_change_df is not None and not cpm_change_df.empty:
+            excel_stack.append(('CPM_Change_P7D_PP7D_P30D', cpm_change_df))
+        excel_stack.extend(res_p1)
+        excel_stack.extend(res_p7)
+        excel_stack.extend(res_pp7)
+        excel_stack.extend(res_p30)
         
+        # 取得目前 session state 的結果 (可能是 None，也可能是跑完後的文字)
+        current_ai_result = st.session_state.get('gemini_result', None)
+        
+        # 產生 Excel Bytes
+        excel_bytes = to_excel_single_sheet_stacked(excel_stack, AI_CONSULTANT_PROMPT, current_ai_result)
+        
+        with st.sidebar:
+            st.divider()
+            if excel_bytes:
+                dl_label = "📥 下載完整分析報表"
+                if current_ai_result:
+                    dl_label += " (含 AI 分析)"
+                
+                st.download_button(
+                    label=dl_label,
+                    data=excel_bytes,
+                    file_name=f"Full_Report_{max_date.strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                st.error("Excel 產生失敗 (xlsxwriter 未安裝)")
+
+        # ==========================================
+        # [NEW] 調整 2：新增 Dashboard 分頁 (Tab 0)
+        # ==========================================
+        tab_dash, tab1, tab2, tab3, tab4 = st.tabs(["📊 自訂儀表板", "📈 戰情室 & 雙重監控", "📑 詳細數據表 (AdSet+Ad)", "🤖 AI 深度診斷 (Gemini)", "🧾 週報產生器 (LINE Markdown)"])
+        
+        # ========== Tab 0：自訂儀表板 ==========
+        with tab_dash:
+            st.subheader("📈 30天趨勢比較儀表板")
+            st.caption("勾選不同對象，比較其在指定指標上的每日變化趨勢。")
+            
+            # 1. 選擇層級
+            dash_level = st.radio("1. 選擇分析層級", ["全帳戶 (Account)", "行銷活動 (Campaign)", "廣告組合 (AdSet)", "廣告 (Ad)"], horizontal=True)
+            
+            # 2. 準備篩選資料
+            df_dash = df_p30d.copy()
+            level_col_map = {
+                "行銷活動 (Campaign)": "行銷活動名稱",
+                "廣告組合 (AdSet)": "廣告組合名稱",
+                "廣告 (Ad)": "廣告名稱"
+            }
+            
+            selected_entities = []
+            if dash_level == "全帳戶 (Account)":
+                df_dash['分析對象'] = '全帳戶'
+                selected_entities = ['全帳戶']
+            else:
+                target_col = level_col_map[dash_level]
+                # 過濾掉 '全帳戶平均' 這種統計行
+                unique_items = sorted([x for x in df_dash[target_col].dropna().unique() if '平均' not in str(x)])
+                selected_entities = st.multiselect(f"2. 選擇 {dash_level} (可多選比對)", unique_items)
+                
+                if not selected_entities:
+                    st.info("👆 請從上方選單選擇至少一個項目來顯示圖表")
+                else:
+                    df_dash = df_dash[df_dash[target_col].isin(selected_entities)].copy()
+                    df_dash['分析對象'] = df_dash[target_col]
+
+            # 3. 選擇指標
+            metric_options = ["花費金額", "轉換數", "CPA", "CTR", "CVR", "CPC", "CPM", "曝光次數", "連結點擊次數"]
+            selected_metric = st.selectbox("3. 選擇指標 (Y軸)", metric_options, index=2) # 預設 CPA
+
+            if selected_entities:
+                # 4. 計算每日數據
+                # 先依 日期 + 分析對象 Groupby Sum
+                daily_agg = df_dash.groupby(['天數', '分析對象']).agg({
+                    '花費金額 (TWD)': 'sum',
+                    conversion_col: 'sum',
+                    '連結點擊次數': 'sum',
+                    '曝光次數': 'sum'
+                }).reset_index()
+                
+                # 計算衍生指標
+                daily_agg['CPA'] = daily_agg.apply(lambda x: x['花費金額 (TWD)'] / x[conversion_col] if x[conversion_col] > 0 else 0, axis=1)
+                daily_agg['CTR'] = daily_agg.apply(lambda x: x['連結點擊次數'] / x['曝光次數'] * 100 if x['曝光次數'] > 0 else 0, axis=1)
+                daily_agg['CVR'] = daily_agg.apply(lambda x: x[conversion_col] / x['連結點擊次數'] * 100 if x['連結點擊次數'] > 0 else 0, axis=1)
+                daily_agg['CPC'] = daily_agg.apply(lambda x: x['花費金額 (TWD)'] / x['連結點擊次數'] if x['連結點擊次數'] > 0 else 0, axis=1)
+                daily_agg['CPM'] = daily_agg.apply(lambda x: x['花費金額 (TWD)'] / x['曝光次數'] * 1000 if x['曝光次數'] > 0 else 0, axis=1)
+                
+                # 對應中文欄位到 DataFrame 欄位
+                metric_map = {
+                    "花費金額": "花費金額 (TWD)",
+                    "轉換數": conversion_col,
+                    "CPA": "CPA",
+                    "CTR": "CTR",
+                    "CVR": "CVR",
+                    "CPC": "CPC",
+                    "CPM": "CPM",
+                    "曝光次數": "曝光次數",
+                    "連結點擊次數": "連結點擊次數"
+                }
+                
+                plot_col = metric_map[selected_metric]
+                
+                # Pivot 轉換成 st.line_chart 需要的格式 (Index=Date, Columns=Entities, Values=Metric)
+                chart_data = daily_agg.pivot(index='天數', columns='分析對象', values=plot_col)
+                chart_data = chart_data.fillna(0)
+                
+                st.markdown(f"#### 📊 {selected_metric} 每日變化趨勢")
+                st.line_chart(chart_data)
+
         # ========== Tab 1：戰情室 ==========
         with tab1:
             col_a, col_b = st.columns(2)
@@ -1043,6 +1154,8 @@ AI 將依照「帳戶層級 → 行銷活動 → AdSet → 廣告 → 30 日趨�
                         new_adsets=new_adsets_df
                     )
                     st.session_state['gemini_result'] = analysis_result
+                    # 強制重新執行一次以刷新側邊欄下載按鈕的內容
+                    st.rerun()
             
             if st.session_state['gemini_result']:
                 st.markdown("### 📝 AI 診斷報告")
@@ -1337,36 +1450,6 @@ AI 將依照「帳戶層級 → 行銷活動 → AdSet → 廣告 → 30 日趨�
 
             st.subheader("📋 可複製 Markdown（貼給客戶）")
             st.code(md, language="markdown")
-
-        # ========== 側邊欄：下載 Excel ==========
-        with st.sidebar:
-            st.divider()
-            excel_stack = []
-            excel_stack.append(('Trend_Daily_30D', trend_30d_df))
-            if cpm_change_df is not None and not cpm_change_df.empty:
-                excel_stack.append(('CPM_Change_P7D_PP7D_P30D', cpm_change_df))
-            excel_stack.extend(res_p1)
-            excel_stack.extend(res_p7)
-            excel_stack.extend(res_pp7)
-            excel_stack.extend(res_p30)
-            
-            current_ai_result = st.session_state.get('gemini_result', None)
-            
-            excel_bytes = to_excel_single_sheet_stacked(excel_stack, AI_CONSULTANT_PROMPT, current_ai_result)
-            
-            if excel_bytes:
-                button_label = "📥 下載完整分析報表"
-                if current_ai_result:
-                    button_label += " (已包含 AI 診斷)"
-                
-                st.download_button(
-                    label=button_label,
-                    data=excel_bytes,
-                    file_name=f"Full_Report_{max_date.strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            else:
-                st.error("Excel 產生失敗，請檢查 xlsxwriter 套件是否安裝。")
 
     except Exception as e:
         st.error(f"系統發生未預期的錯誤: {e}")
